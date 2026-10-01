@@ -81,8 +81,12 @@ class ErrorFeedback(Quantizer):
         factor, status = torch.linalg.cholesky_ex(hessian)
         if status.item() != 0:
             raise ValueError("calibration Hessian is not positive definite; increase damp")
+        if permutation is None:
+            del diagonal, hessian
         inverse = torch.cholesky_inverse(factor)
+        del factor
         upper = torch.linalg.cholesky(inverse, upper=True).contiguous()
+        del inverse
         output = torch.empty_like(working)
         total_bits: float | None = 0.0
         encoded = None
