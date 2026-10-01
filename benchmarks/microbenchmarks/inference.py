@@ -43,8 +43,12 @@ def linear(
     return prepare
 
 
-def layer_stack(backend: str) -> Callable[[], Callable[[], Any]]:
-    """One decoded token through the projections of sixteen Llama-sized blocks."""
+def layer_stack(backend: str, batch: int) -> Callable[[], Callable[[], Any]]:
+    """Decoded tokens through the projections of sixteen Llama-sized blocks.
+
+    The stack holds 1.9 GiB of FP16 weights, far more than the GPU cache, so
+    every layer is read from memory as it is during generation.
+    """
     def prepare() -> Callable[[], Any]:
         torch.manual_seed(41)
         layers = []
@@ -56,7 +60,7 @@ def layer_stack(backend: str) -> Callable[[], Callable[[], Any]]:
         converted = mk.quantize(nn.Sequential(*layers), int4(), calib=None)
         model = mk.optimize(converted, backend=backend, inplace=True)
         inputs = torch.randn(
-            1, 2048, device="cuda", dtype=torch.float16, generator=seeded_generator(79)
+            batch, 2048, device="cuda", dtype=torch.float16, generator=seeded_generator(79)
         )
         stack = model.module
         return lambda: stack(inputs)
@@ -96,14 +100,15 @@ def cases() -> list[Case]:
         shape = LLAMA_SHAPES[label]
         selected.append(linear_case("nf4", nf4, "llama", label, shape, 1, "packed"))
     stack_elements = 16 * (2048 * 2048 + 2 * 8192 * 2048)
-    for backend in ("dense", "packed"):
-        selected.append(Case(
-            GROUP,
-            f"layer-stack-int4/{backend}-48-layers-batch1",
-            layer_stack(backend),
-            warmup=10,
-            repetitions=50,
-            elements=stack_elements,
-            parameters={"batch": 1, "backend": backend},
-        ))
+    for batch in (1, 4, 8, 32):
+        for backend in ("dense", "packed"):
+            selected.append(Case(
+                GROUP,
+                f"layer-stack-int4/{backend}-48-layers-batch{batch}",
+                layer_stack(backend, batch),
+                warmup=10,
+                repetitions=50,
+                elements=stack_elements,
+                parameters={"batch": batch, "backend": backend},
+            ))
     return selected
