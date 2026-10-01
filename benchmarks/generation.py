@@ -25,9 +25,14 @@ def main() -> None:
     )
     records = []
     quantized = None
-    for backend in ["baseline", "dense", "packed"]:
+    backends = ["baseline", "baseline-compiled", "dense", "packed"] if arguments.compile else [
+        "baseline", "dense", "packed",
+    ]
+    for backend in backends:
         if backend == "baseline":
             selected = model
+        elif backend == "baseline-compiled":
+            selected = mk.optimize(model, backend="dense", compile=True)
         else:
             if quantized is None:
                 quantized = mk.quantize(model, mk.int(4, group=128), calib=None)

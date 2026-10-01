@@ -1,7 +1,7 @@
 """Fused scalar-grid INT4 decoding and matrix-vector multiplication."""
 
 import triton
-import triton.language as language
+import triton.language as tl
 from torch import Tensor
 
 
@@ -26,45 +26,45 @@ def packed_matrix_vector(
     zeros,
     bias,
     output,
-    input_width: language.constexpr,
-    output_width: language.constexpr,
-    group_width: language.constexpr,
-    groups_per_row: language.constexpr,
-    has_zero: language.constexpr,
-    has_bias: language.constexpr,
-    uniform_grid: language.constexpr,
-    grid_minimum: language.constexpr,
-    grid_step: language.constexpr,
-    row_tile: language.constexpr,
-    column_tile: language.constexpr,
+    input_width: tl.constexpr,
+    output_width: tl.constexpr,
+    group_width: tl.constexpr,
+    groups_per_row: tl.constexpr,
+    has_zero: tl.constexpr,
+    has_bias: tl.constexpr,
+    uniform_grid: tl.constexpr,
+    grid_minimum: tl.constexpr,
+    grid_step: tl.constexpr,
+    row_tile: tl.constexpr,
+    column_tile: tl.constexpr,
 ):
-    rows = language.program_id(0) * row_tile + language.arange(0, row_tile)
-    sample = language.program_id(1)
-    columns = language.arange(0, column_tile)
-    accumulator = language.full((row_tile,), 0, language.float32)
-    for offset in range(language.cdiv(input_width, column_tile)):
+    rows = tl.program_id(0) * row_tile + tl.arange(0, row_tile)
+    sample = tl.program_id(1)
+    columns = tl.arange(0, column_tile)
+    accumulator = tl.full((row_tile,), 0, tl.float32)
+    for offset in range(tl.cdiv(input_width, column_tile)):
         positions = offset * column_tile + columns
         weight_indices = rows[:, None] * input_width + positions[None, :]
         valid = (rows[:, None] < output_width) & (positions[None, :] < input_width)
-        bytes = language.load(packed + weight_indices // 2, valid, other=0)
+        bytes = tl.load(packed + weight_indices // 2, valid, other=0)
         codes = (bytes >> ((weight_indices % 2) * 4)) & 15
         if uniform_grid:
-            code_values = grid_minimum + codes.to(language.float32) * grid_step
+            code_values = grid_minimum + codes.to(tl.float32) * grid_step
         else:
-            code_values = language.load(values + codes)
+            code_values = tl.load(values + codes)
         scale_indices = rows[:, None] * groups_per_row + positions[None, :] // group_width
-        scale_values = language.load(scales + scale_indices, valid, other=0)
+        scale_values = tl.load(scales + scale_indices, valid, other=0)
         weights = code_values * scale_values
         if has_zero:
-            weights += language.load(zeros + scale_indices, valid, other=0)
-        weights = weights.to(inputs.dtype.element_ty).to(language.float32)
-        activations = language.load(
+            weights += tl.load(zeros + scale_indices, valid, other=0)
+        weights = weights.to(inputs.dtype.element_ty).to(tl.float32)
+        activations = tl.load(
             inputs + sample * input_width + positions, positions < input_width, other=0
-        ).to(language.float32)
-        accumulator += language.sum(weights * activations[None, :], axis=1)
+        ).to(tl.float32)
+        accumulator += tl.sum(weights * activations[None, :], axis=1)
     if has_bias:
-        accumulator += language.load(bias + rows, rows < output_width, other=0)
-    language.store(output + sample * output_width + rows, accumulator, rows < output_width)
+        accumulator += tl.load(bias + rows, rows < output_width, other=0)
+    tl.store(output + sample * output_width + rows, accumulator, rows < output_width)
 
 
 def matrix_vector(
@@ -98,30 +98,30 @@ def decode_matrix(
     values,
     zeros,
     output,
-    elements: language.constexpr,
-    input_width: language.constexpr,
-    group_width: language.constexpr,
-    groups_per_row: language.constexpr,
-    has_zero: language.constexpr,
-    uniform_grid: language.constexpr,
-    grid_minimum: language.constexpr,
-    grid_step: language.constexpr,
-    tile: language.constexpr,
+    elements: tl.constexpr,
+    input_width: tl.constexpr,
+    group_width: tl.constexpr,
+    groups_per_row: tl.constexpr,
+    has_zero: tl.constexpr,
+    uniform_grid: tl.constexpr,
+    grid_minimum: tl.constexpr,
+    grid_step: tl.constexpr,
+    tile: tl.constexpr,
 ):
-    indices = language.program_id(0) * tile + language.arange(0, tile)
+    indices = tl.program_id(0) * tile + tl.arange(0, tile)
     valid = indices < elements
-    bytes = language.load(packed + indices // 2, valid, other=0)
+    bytes = tl.load(packed + indices // 2, valid, other=0)
     codes = (bytes >> ((indices % 2) * 4)) & 15
     if uniform_grid:
-        code_values = grid_minimum + codes.to(language.float32) * grid_step
+        code_values = grid_minimum + codes.to(tl.float32) * grid_step
     else:
-        code_values = language.load(values + codes)
+        code_values = tl.load(values + codes)
     rows, columns = indices // input_width, indices % input_width
     scale_indices = rows * groups_per_row + columns // group_width
-    weights = code_values * language.load(scales + scale_indices, valid, other=0)
+    weights = code_values * tl.load(scales + scale_indices, valid, other=0)
     if has_zero:
-        weights += language.load(zeros + scale_indices, valid, other=0)
-    language.store(output + indices, weights, valid)
+        weights += tl.load(zeros + scale_indices, valid, other=0)
+    tl.store(output + indices, weights, valid)
 
 
 def decode(
@@ -141,86 +141,3 @@ def decode(
         grid_step, 4096, num_warps=4,
     )
 
-
-@triton.autotune(
-    configs=[
-        triton.Config({"batch_tile": 16, "output_tile": 32, "column_tile": 64}, num_warps=4),
-        triton.Config({"batch_tile": 16, "output_tile": 64, "column_tile": 128}, num_warps=4),
-        triton.Config({"batch_tile": 32, "output_tile": 64, "column_tile": 64}, num_warps=4),
-        triton.Config({"batch_tile": 32, "output_tile": 64, "column_tile": 128}, num_warps=4),
-        triton.Config({"batch_tile": 64, "output_tile": 64, "column_tile": 128}, num_warps=4),
-    ],
-    key=["batch_size", "input_width", "output_width", "group_width"],
-)
-@triton.jit
-def packed_matrix_multiply(
-    inputs,
-    packed,
-    scales,
-    values,
-    zeros,
-    bias,
-    output,
-    batch_size: language.constexpr,
-    input_width: language.constexpr,
-    output_width: language.constexpr,
-    group_width: language.constexpr,
-    groups_per_row: language.constexpr,
-    has_zero: language.constexpr,
-    has_bias: language.constexpr,
-    batch_tile: language.constexpr,
-    output_tile: language.constexpr,
-    column_tile: language.constexpr,
-):
-    samples = language.program_id(0) * batch_tile + language.arange(0, batch_tile)
-    rows = language.program_id(1) * output_tile + language.arange(0, output_tile)
-    columns = language.arange(0, column_tile)
-    accumulator = language.full((batch_tile, output_tile), 0, language.float32)
-    for offset in range(language.cdiv(input_width, column_tile)):
-        positions = offset * column_tile + columns
-        activations = language.load(
-            inputs + samples[:, None] * input_width + positions[None, :],
-            (samples[:, None] < batch_size) & (positions[None, :] < input_width), other=0,
-        )
-        weight_indices = rows[:, None] * input_width + positions[None, :]
-        valid = (rows[:, None] < output_width) & (positions[None, :] < input_width)
-        bytes = language.load(packed + weight_indices // 2, valid, other=0)
-        codes = (bytes >> ((weight_indices % 2) * 4)) & 15
-        code_values = language.load(values + codes)
-        scale_indices = rows[:, None] * groups_per_row + positions[None, :] // group_width
-        weights = code_values * language.load(scales + scale_indices, valid, other=0)
-        if has_zero:
-            weights += language.load(zeros + scale_indices, valid, other=0)
-        weights = weights.to(inputs.dtype.element_ty)
-        accumulator = language.dot(
-            activations, language.trans(weights), accumulator, input_precision="tf32x3"
-        )
-    if has_bias:
-        accumulator += language.load(bias + rows, rows < output_width, other=0)[None, :]
-    language.store(
-        output + samples[:, None] * output_width + rows[None, :], accumulator,
-        (samples[:, None] < batch_size) & (rows[None, :] < output_width),
-    )
-
-
-def matrix_multiply(
-    inputs: Tensor,
-    packed: Tensor,
-    scales: Tensor,
-    values: Tensor,
-    zeros: Tensor | None,
-    bias: Tensor | None,
-    output: Tensor,
-    group: int,
-) -> None:
-    def launch_grid(parameters):
-        return (
-            triton.cdiv(inputs.shape[0], parameters["batch_tile"]),
-            triton.cdiv(output.shape[-1], parameters["output_tile"]),
-        )
-
-    packed_matrix_multiply[launch_grid](
-        inputs, packed, scales, values, zeros, bias, output,
-        inputs.shape[0], inputs.shape[-1], output.shape[-1], group, scales.shape[1],
-        zeros is not None, bias is not None,
-    )

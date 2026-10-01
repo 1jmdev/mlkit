@@ -1,9 +1,9 @@
 """Fused sequential scalar integer rounding inside a GPTQ update tile."""
 
 import triton
-import triton.language as language
+import triton.language as tl
 from torch import Tensor
-from triton.language.extra.cuda import libdevice
+from triton.tl.extra.cuda import libdevice
 
 
 @triton.jit
@@ -15,47 +15,47 @@ def round_feedback_tile(
     output,
     encoded,
     errors,
-    input_width: language.constexpr,
-    output_width: language.constexpr,
-    region_start: language.constexpr,
-    tile_start: language.constexpr,
-    tile_width: language.constexpr,
-    group_width: language.constexpr,
-    groups_per_row: language.constexpr,
-    minimum_code: language.constexpr,
-    maximum_code: language.constexpr,
-    has_zero: language.constexpr,
-    row_tile: language.constexpr,
-    column_tile: language.constexpr,
+    input_width: tl.constexpr,
+    output_width: tl.constexpr,
+    region_start: tl.constexpr,
+    tile_start: tl.constexpr,
+    tile_width: tl.constexpr,
+    group_width: tl.constexpr,
+    groups_per_row: tl.constexpr,
+    minimum_code: tl.constexpr,
+    maximum_code: tl.constexpr,
+    has_zero: tl.constexpr,
+    row_tile: tl.constexpr,
+    column_tile: tl.constexpr,
 ):
-    rows = language.program_id(0) * row_tile + language.arange(0, row_tile)
-    columns = language.arange(0, column_tile)
+    rows = tl.program_id(0) * row_tile + tl.arange(0, row_tile)
+    columns = tl.arange(0, column_tile)
     valid = (rows[:, None] < output_width) & (columns[None, :] < tile_width)
-    weights = language.load(
+    weights = tl.load(
         working + rows[:, None] * input_width + tile_start + columns[None, :], valid, other=0
     )
     for column in range(tile_width):
-        original = language.sum(language.where(columns[None, :] == column, weights, 0), axis=1)
+        original = tl.sum(tl.where(columns[None, :] == column, weights, 0), axis=1)
         scale_indices = rows * groups_per_row + (tile_start + column - region_start) // group_width
-        scale_values = language.load(scales + scale_indices, rows < output_width, other=1)
-        zero_values = language.full((row_tile,), 0, language.float32)
+        scale_values = tl.load(scales + scale_indices, rows < output_width, other=1)
+        zero_values = tl.full((row_tile,), 0, tl.float32)
         if has_zero:
-            zero_values = language.load(zeros + scale_indices, rows < output_width, other=0)
+            zero_values = tl.load(zeros + scale_indices, rows < output_width, other=0)
         codes = libdevice.nearbyint((original - zero_values) / scale_values)
-        codes = language.minimum(language.maximum(codes, minimum_code), maximum_code)
+        codes = tl.minimum(tl.maximum(codes, minimum_code), maximum_code)
         reconstruction = codes * scale_values + zero_values
-        diagonal = language.load(upper + (tile_start + column) * input_width + tile_start + column)
+        diagonal = tl.load(upper + (tile_start + column) * input_width + tile_start + column)
         error = (original - reconstruction) / diagonal
-        coefficients = language.load(
+        coefficients = tl.load(
             upper + (tile_start + column) * input_width + tile_start + columns,
             (columns > column) & (columns < tile_width), other=0,
         )
         weights -= error[:, None] * coefficients[None, :]
-        language.store(output + rows * input_width + tile_start + column,
+        tl.store(output + rows * input_width + tile_start + column,
                        reconstruction, rows < output_width)
-        language.store(encoded + rows * input_width + tile_start + column,
-                       (codes - minimum_code).to(language.int32), rows < output_width)
-        language.store(errors + rows * tile_width + column, error, rows < output_width)
+        tl.store(encoded + rows * input_width + tile_start + column,
+                       (codes - minimum_code).to(tl.int32), rows < output_width)
+        tl.store(errors + rows * tile_width + column, error, rows < output_width)
 
 
 def round_tile(

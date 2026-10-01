@@ -153,7 +153,18 @@ def optimize(
     else:
         converted.execution_backend = "dense"
     if compile:
-        converted.module.compile(mode=mode)
+        if getattr(converted.module, "_mlkit_kv_quantizer", None) is not None:
+            raise ValueError("online KV quantization currently supports eager generation")
+        configuration = getattr(converted.module, "generation_config", None)
+        if configuration is not None and hasattr(converted.module, "get_compiled_call"):
+            from transformers import CompileConfig
+
+            configuration = copy.deepcopy(configuration)
+            configuration.cache_implementation = "static"
+            configuration.compile_config = CompileConfig(mode=mode)
+            converted.module.generation_config = configuration
+        else:
+            converted.module.compile(mode=mode)
         converted.execution_backend += "+compiled"
     return converted
 
