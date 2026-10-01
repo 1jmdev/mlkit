@@ -1,0 +1,17 @@
+{
+  "samples": 1000000,
+  "dimension": 1,
+  "centers": 16,
+  "iterations": 10,
+  "seed": 17,
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "torch": "2.14.1+cu130",
+  "cuda": "13.0",
+  "median_ms": 57.83674899998914,
+  "minimum_ms": 56.717558999935136,
+  "percentile_95_ms": 59.626108999964345,
+  "repetitions": 3,
+  "device": "cuda:0",
+  "peak_memory_bytes": 88695808,
+  "measurement_date": "2026-10-01"
+}

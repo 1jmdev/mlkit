@@ -85,19 +85,21 @@ A single quantizer skips embeddings and the output head by default.
 
 ```python
 quantized = mk.quantize(model, mk.int(4, group=128), calib=None)
-inference_model = mk.optimize(quantized)
+inference_model = mk.optimize(quantized, compile=True)
 inputs = model.tokenizer("Explain weight quantization.", return_tensors="pt")
 tokens = inference_model.generate(**inputs, max_new_tokens=64)
 print(model.tokenizer.decode(tokens[0], skip_special_tokens=True))
 
 inference_model.save("checkpoints/int4")
-restored = mk.optimize(mk.load("checkpoints/int4"))
+restored = mk.optimize(mk.load("checkpoints/int4"), compile=True)
 ```
 
 Quantization first produces reconstructed weights for research and evaluation.
 `optimize` uses packed four-bit scalar codecs when compatible, including INT4
 and NF4. Other formats retain reconstructed weights. Packed decoding uses a
 fused CUDA kernel; prefill reconstructs weights for matrix multiplication.
+Compiled Hugging Face generation uses a static cache for decoding. The first
+generation includes compilation; subsequent calls reuse the compiled graph.
 Checkpoints contain a JSON manifest and safetensors, without executable decoder
 code. Custom registered codecs must be available when their checkpoints load.
 
@@ -114,3 +116,9 @@ See [the contributor guide](docs/contributing.md) for development conventions.
 Runnable examples cover [model conversion and generation](examples/quantize_model.py),
 [a learned format](examples/learned_codebook.py) and
 [lattice and trellis quantization](examples/vector_quantization.py).
+Additional examples cover [calibrated recipes](examples/calibrated_recipes.py) and
+[layer probes](examples/probe_formats.py). See the [API guide](docs/api.md) for
+composition and supported features, and [CUDA measurements](docs/performance.md)
+for tested Qwen and Llama workloads.
+The optional evaluation extra supports [task evaluation](examples/evaluate_tasks.py)
+with lm-evaluation-harness.

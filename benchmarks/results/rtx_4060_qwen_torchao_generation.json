@@ -1,0 +1,32 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B",
+  "torch": "2.14.1+cu130",
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "compiled": true,
+  "cuda": "13.0",
+  "dtype": "float16",
+  "rtn_quantization": {
+    "bits": 4,
+    "group": 128,
+    "seed": 0
+  },
+  "warmup_generations": 2,
+  "measurements": [
+    {
+      "backend": "torchao-int4+compiled",
+      "method": "torchao-int4",
+      "prompt_tokens": 13,
+      "generated_tokens": 64,
+      "tokens_per_second": 222.27158349282723,
+      "model_storage_bytes": 484651008,
+      "dtype": "bfloat16",
+      "median_ms": 287.93604200001255,
+      "minimum_ms": 273.05860300003815,
+      "percentile_95_ms": 300.4205149999848,
+      "repetitions": 5,
+      "device": "cuda:0",
+      "peak_memory_bytes": 524344320
+    }
+  ],
+  "measurement_date": "2026-10-01"
+}
