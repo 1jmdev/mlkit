@@ -59,3 +59,30 @@ def test_wrapper_places_input_tensors_automatically() -> None:
     model = mk.Model(nn.Linear(8, 4))
     output = model(torch.randn(3, 8))
     assert output.is_cuda
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("cuda_tensors")
+def test_packed_copy_rebinds_activation_context_and_owns_its_storage() -> None:
+    observed_modules = []
+
+    @mk.quantizer
+    def record_inputs(inputs, context):
+        observed_modules.append(context.module)
+        return inputs
+
+    module = nn.Sequential(nn.Linear(128, 64, bias=False))
+    converted = mk.quantize(
+        module, mk.Recipe(weights=mk.int(4, group=32), acts=record_inputs), calib=None
+    )
+    packed = mk.optimize(converted, backend="packed")
+    inputs = torch.randn(2, 128)
+    with torch.inference_mode():
+        expected = converted(inputs)
+        observed_modules.clear()
+        actual = packed(inputs)
+        torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+        assert observed_modules == [packed.module[0]]
+        converted.module[0].weight.zero_()
+        torch.testing.assert_close(packed(inputs), actual, rtol=0, atol=0)
+    assert packed.storage_bytes < converted.storage_bytes

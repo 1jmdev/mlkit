@@ -128,37 +128,51 @@ def optimize(
     if backend not in {"auto", "dense", "packed"}:
         raise ValueError("backend must be auto, dense, or packed")
     wrapped = model if isinstance(model, Model) else Model(model)
-    converted = wrapped if inplace else copy.deepcopy(wrapped)
-    if isinstance(converted, QModel):
-        _ = converted.model_bpw
+    if isinstance(wrapped, QModel):
+        _ = wrapped.model_bpw
     if backend == "auto":
-        use_packed = isinstance(converted, QModel)
+        use_packed = isinstance(wrapped, QModel)
         backend = "packed" if use_packed else "dense"
+    converted: Model
+    replacements: dict[int, Any] = {}
     if backend == "packed":
-        if not isinstance(converted, QModel):
+        if not isinstance(wrapped, QModel):
             raise ValueError("packed inference requires a QModel with codec state")
         try:
             import triton  # noqa: F401
         except ImportError as error:
             raise ImportError("packed CUDA inference requires Triton") from error
-        replaced = 0
-        for name, quantized in converted.quantized.items():
-            module = converted.module.get_submodule(name)
-            compatible = (
-                quantized.codec in {"scaled", "feedback"}
-                and quantized.metadata.get("code_bits") == 4
-                and quantized.params.get("permutation") is None
-                and not quantized.params.get("refit", quantized.params["group"])
-                % quantized.params["group"]
-            ) if quantized.codec in {"scaled", "feedback"} else False
-            if isinstance(module, nn.Linear) and compatible:
-                converted.module.set_submodule(name, PackedLinear(
+        for name, quantized in wrapped.quantized.items():
+            module = wrapped.module.get_submodule(name)
+            if isinstance(module, nn.Linear) and packed_compatible(quantized):
+                replacements[id(module)] = PackedLinear(
                     module, quantized, cache_dense=cache_dense
-                ))
-                replaced += 1
-        converted.execution_backend = f"packed:{replaced}"
+                )
+        replacement_count = len(replacements)
+        if inplace:
+            for name in wrapped.quantized:
+                module = wrapped.module.get_submodule(name)
+                if id(module) in replacements:
+                    wrapped.module.set_submodule(name, replacements[id(module)])
+            converted = wrapped
+        else:
+            converted = copy.deepcopy(wrapped, replacements)
+            # Rebind hook contexts after all enclosing blocks have entered the memo.
+            for module in converted.module.modules():
+                if isinstance(module, PackedLinear):
+                    module._forward_pre_hooks = copy.deepcopy(
+                        module._forward_pre_hooks, replacements
+                    )
+        converted.execution_backend = f"packed:{replacement_count}"
     else:
+        converted = wrapped if inplace else copy.deepcopy(wrapped)
         converted.execution_backend = "dense"
+    if not inplace or backend == "packed":
+        for attribute in (
+            "_compiled_call", "_compiled_call_impl", "_last_compile_config", "_cache",
+        ):
+            if attribute in converted.module.__dict__:
+                delattr(converted.module, attribute)
     if compile:
         if getattr(converted.module, "_mlkit_kv_quantizer", None) is not None:
             raise ValueError("online KV quantization currently supports eager generation")
@@ -174,6 +188,19 @@ def optimize(
             converted.module.compile(mode=mode)
         converted.execution_backend += "+compiled"
     return converted
+
+
+def packed_compatible(quantized: Q) -> bool:
+    """Require a complete scalar codec with group-aligned fitting regions."""
+    if quantized.codec not in {"scaled", "feedback"}:
+        return False
+    group = quantized.params["group"]
+    return (
+        quantized.metadata.get("code_bits") == 4
+        and quantized.params.get("offset", 0) == 0
+        and quantized.params.get("permutation") is None
+        and quantized.params.get("refit", group) % group == 0
+    )
 
 
 def export_torchao(
