@@ -153,7 +153,12 @@ def optimize(
             for name in wrapped.quantized:
                 module = wrapped.module.get_submodule(name)
                 if id(module) in replacements:
-                    wrapped.module.set_submodule(name, replacements[id(module)])
+                    replacement = replacements[id(module)]
+                    if name:
+                        wrapped.module.set_submodule(name, replacement)
+                    else:
+                        wrapped.module = replacement
+                        wrapped.architecture.model = replacement
             converted = wrapped
         else:
             converted = copy.deepcopy(wrapped, replacements)

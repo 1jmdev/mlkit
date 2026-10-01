@@ -201,7 +201,7 @@ class QModel(Model):
         if self.bpw is None:
             return None
         if self._parameter_accounting is None:
-            selected = {f"{record.name}.weight" for record in self.layer_reports}
+            selected = {weight_name(record.name) for record in self.layer_reports}
             original_bits = 0
             original_elements = 0
             for name, parameter in self.module.named_parameters():
@@ -270,6 +270,10 @@ def preserve_input_processing(original: nn.Module, replacement: nn.Module) -> No
     for name, value in original.named_buffers(recurse=False):
         if name.startswith("_mlkit_"):
             replacement.register_buffer(name, value.detach().clone())
+
+
+def weight_name(module_name: str) -> str:
+    return f"{module_name}.weight" if module_name else "weight"
 
 
 def module_device(module: nn.Module) -> torch.device:

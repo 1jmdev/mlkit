@@ -1,5 +1,6 @@
 """Versioned JSON manifests and tensor-only, portable checkpoints."""
 
+import hashlib
 import json
 import os
 import shutil
@@ -18,7 +19,7 @@ from mlkit.quantization.codecs import decoder, registered
 from mlkit.quantization.context import Ctx
 from mlkit.quantization.packing import pack, unpack
 from mlkit.quantization.representation import Q
-from mlkit.runtime.models import LayerReport, QModel
+from mlkit.runtime.models import LayerReport, QModel, weight_name
 from mlkit.runtime.online import install_activation_quantization, restore_quantizer
 
 FORMAT_VERSION = 1
@@ -38,6 +39,7 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
     temporary = Path(tempfile.mkdtemp(prefix="mlkit_checkpoint_", dir=destination.parent))
     try:
         tensors: dict[str, Tensor] = {}
+        parameter_fingerprints: dict[tuple, str] = {}
         layers = {}
         for name, quantized in model.quantized.items():
             if registered(quantized.codec) and quantized.codes is not None:
@@ -71,7 +73,20 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
                             elif format == "e8m0":
                                 value = (value.float().log2().round() + 127).to(torch.uint8)
                                 encoding = "e8m0"
-                        tensors[identifier] = value.detach().cpu().contiguous().clone()
+                        stored_value = value.detach().cpu().contiguous()
+                        fingerprint = (
+                            str(stored_value.dtype),
+                            tuple(stored_value.shape),
+                            hashlib.sha256(
+                                stored_value.reshape(-1).view(torch.uint8).numpy().tobytes()
+                            ).digest(),
+                        )
+                        canonical_identifier = parameter_fingerprints.get(fingerprint)
+                        if canonical_identifier is None:
+                            tensors[identifier] = stored_value.clone()
+                            parameter_fingerprints[fingerprint] = identifier
+                        else:
+                            descriptor["tensor"] = canonical_identifier
                         if encoding is not None:
                             descriptor["encoding"] = encoding
                         parameters[parameter_name] = descriptor
@@ -89,13 +104,24 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
                 reconstruction = quantized.w.detach().cpu()
                 tensors[f"{name}.reconstruction"] = reconstruction.contiguous()
                 layers[name] = {"codec": None, "bits": quantized.bits}
-        omitted = {f"{name}.weight" for name in model.quantized}
+        omitted = {weight_name(name) for name in model.quantized}
+        state_storages: dict[tuple, str] = {}
+        state_aliases = {}
         for name, value in model.module.state_dict().items():
             owner, _, field = name.rpartition(".")
             if owner in model.quantized and field in {"packed", "scales", "values", "zeros"}:
                 continue
             if name not in omitted:
-                tensors[f"state.{name}"] = value.detach().cpu().contiguous().clone()
+                identity = (
+                    value.device, value.data_ptr(), value.dtype,
+                    tuple(value.shape), tuple(value.stride()),
+                )
+                canonical_name = state_storages.get(identity)
+                if canonical_name is None:
+                    tensors[f"state.{name}"] = value.detach().cpu().contiguous().clone()
+                    state_storages[identity] = name
+                else:
+                    state_aliases[name] = canonical_name
         save_file(tensors, str(temporary / "weights.safetensors"))
         configuration = getattr(model.module, "config", None)
         if configuration is not None:
@@ -111,6 +137,7 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
             "parameter_accounting": model._parameter_accounting,
             "transforms": getattr(model.module, "_mlkit_transforms", []),
             "activations": model.activation_specs, "kv": model.kv_spec,
+            "state_aliases": state_aliases,
             "tensor_bytes": sum(value.numel() * value.element_size() for value in tensors.values()),
         }
         (temporary / "mlkit.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -166,6 +193,8 @@ def load_checkpoint(
     tensors = load_file(str(directory / "weights.safetensors"))
     state = {name.removeprefix("state."): value for name, value in tensors.items()
              if name.startswith("state.")}
+    for alias, canonical_name in manifest.get("state_aliases", {}).items():
+        state[alias] = state[canonical_name]
     converted = QModel(model, tokenizer, name=manifest["name"])
     for name, layer in manifest["layers"].items():
         if layer["codec"] is not None:
@@ -184,7 +213,7 @@ def load_checkpoint(
         else:
             quantized = Q(tensors[f"{name}.reconstruction"], bits=layer["bits"])
         converted.quantized[name] = quantized
-        state[f"{name}.weight"] = quantized.to("cuda").w.detach().cpu()
+        state[weight_name(name)] = quantized.to("cuda").w.detach().cpu()
     from mlkit.runtime.transforms import install_transform, record_transform
 
     for descriptor in manifest.get("transforms", []):
