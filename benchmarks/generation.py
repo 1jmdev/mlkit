@@ -50,6 +50,7 @@ def main() -> None:
             "backend": selected.execution_backend, "method": backend,
             "prompt_tokens": inputs["input_ids"].numel(), "generated_tokens": arguments.tokens,
             "tokens_per_second": arguments.tokens * 1000 / measurement.median_ms,
+            "model_storage_bytes": selected.storage_bytes,
             "generated_ids": output[0, inputs["input_ids"].shape[1] :].tolist(),
             **measurement.to_dict(),
         }

@@ -48,10 +48,17 @@ class PackedLinear(nn.Module):
         self.storage_dtype = original.weight.dtype
         self.cache_dense = cache_dense
         self.register_buffer("packed", pack(quantized.codes, 4).to(device))
-        self.register_buffer("scales", quantized.params["scales"].to(device).contiguous())
+        scale_dtype = {
+            "fp16": torch.float16, "bf16": torch.bfloat16,
+        }.get(quantized.metadata.get("scale_fmt"), quantized.params["scales"].dtype)
+        self.register_buffer(
+            "scales", quantized.params["scales"].to(device=device, dtype=scale_dtype).contiguous()
+        )
         self.register_buffer("values", quantized.params["values"].to(device).contiguous())
         zero = quantized.params.get("zero")
-        self.register_buffer("zeros", None if zero is None else zero.to(device).contiguous())
+        self.register_buffer("zeros", None if zero is None else zero.to(
+            device=device, dtype=scale_dtype
+        ).contiguous())
         self.register_buffer(
             "bias", None if original.bias is None else original.bias.detach().clone()
         )

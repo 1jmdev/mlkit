@@ -147,6 +147,15 @@ class Model(nn.Module):
         return self._initial_dtype if tensor is None else tensor.dtype
 
     @property
+    def storage_bytes(self) -> int:
+        """Bytes in distinct registered parameter and buffer storages, excluding KV caches."""
+        storages = {}
+        for tensor in [*self.module.parameters(), *self.module.buffers()]:
+            storage = tensor.untyped_storage()
+            storages[(tensor.device, storage.data_ptr())] = storage.nbytes()
+        return sum(storages.values())
+
+    @property
     def config(self) -> Any:
         return self.module.config
 
