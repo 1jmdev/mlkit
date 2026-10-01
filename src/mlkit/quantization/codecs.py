@@ -6,7 +6,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from mlkit.quantization.formats import decode_feedback, decode_scaled
+from mlkit.quantization.formats import decode_feedback, decode_scaled, decode_vector_scaled
 from mlkit.quantization.representation import Q
 from mlkit.quantization.rotations import structured_transform
 from mlkit.quantization.trellis import decode_trellis
@@ -60,6 +60,8 @@ _DECODERS: dict[str, Callable[..., Tensor]] = {
     "trellis": decode_trellis,
     "basis": decode_basis,
     "channel_scaled": decode_channel_scaled,
+    "vector_scaled": decode_vector_scaled,
+    "vector_feedback": decode_vector_scaled,
 }
 
 
@@ -92,7 +94,7 @@ def compose(quantized: Q, name: str, parameters: dict[str, Any]) -> Q:
         f"inner_{parameter}" for parameter in metadata.get("trainable", [])
     ]
     formats = dict(metadata.get("parameter_formats", {}))
-    if quantized.codec in {"scaled", "feedback"}:
+    if quantized.codec in {"scaled", "feedback", "vector_scaled", "vector_feedback"}:
         formats["scales"] = formats["zero"] = metadata.get("scale_fmt", "fp32")
     metadata["parameter_formats"] = {f"inner_{key}": value for key, value in formats.items()}
     metadata["parameter_bits"] = {

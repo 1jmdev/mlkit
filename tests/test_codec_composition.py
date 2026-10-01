@@ -55,3 +55,21 @@ def test_shared_awq_uses_one_scale_and_counts_it_once(tmp_path) -> None:
     converted.save(tmp_path / "awq")
     restored = mk.load(tmp_path / "awq", model=SharedProjectionModel)
     torch.testing.assert_close(converted(inputs), restored(inputs), rtol=0, atol=0)
+
+
+def test_e8p_feedback_codec_supports_sign_finetuning(tmp_path) -> None:
+    inputs = torch.randn(4, 16)
+    format = mk.scaled(mk.grid.e8p(), group=None)
+    algorithm = mk.incoherent(mk.ldlq(format, step=8), train_signs=True)
+    recipe = mk.Recipe(weights=algorithm, passes=[mk.finetune(steps=2, bs=1)])
+    converted = mk.quantize(nn.Sequential(nn.Linear(16, 8, bias=False)), recipe,
+                            calib=[inputs], cache_dir=None)
+    representation = converted.quantized["0"]
+    assert representation.codec == "basis"
+    assert representation.params["inner_codec"] == "vector_feedback"
+    assert representation.codes.shape == (8, 2)
+    converted.save(tmp_path / "e8p")
+    restored = mk.load(tmp_path / "e8p", model=lambda: nn.Sequential(
+        nn.Linear(16, 8, bias=False)
+    ))
+    torch.testing.assert_close(restored(inputs), converted(inputs), rtol=1e-5, atol=1e-6)

@@ -9,7 +9,7 @@ from torch import Tensor
 
 from mlkit.quantization.codecs import compose, deterministic_signs, registered
 from mlkit.quantization.context import Ctx, layer_seed
-from mlkit.quantization.formats import Scaled, decode_feedback
+from mlkit.quantization.formats import Scaled, decode_feedback, decode_vector_scaled
 from mlkit.quantization.operations import proxy_loss
 from mlkit.quantization.protocol import Quantizer, fit_quantizer
 from mlkit.quantization.representation import Q, as_q
@@ -151,14 +151,20 @@ class ErrorFeedback(Quantizer):
                     if quantized.codec == "trellis" and self.refit is None and permutation is None:
                         trellis_parts.append(quantized)
                     if retain_codec:
-                        if quantized.codec != "scaled" or quantized.codes is None:
+                        if (quantized.codec not in {"scaled", "vector_scaled"}
+                                or quantized.codes is None):
                             retain_codec = False
                         else:
                             if encoded is None:
-                                encoded = torch.empty_like(working, dtype=quantized.codes.dtype)
+                                dimension = quantized.params.get("dim", 1)
+                                encoded = torch.empty(
+                                    (working.shape[0], width // dimension),
+                                    device=working.device, dtype=quantized.codes.dtype,
+                                )
                                 codec_parameters = quantized.params
                                 codec_metadata = quantized.metadata
-                            encoded[:, column:stop] = quantized.codes
+                            dimension = quantized.params.get("dim", 1)
+                            encoded[:, column // dimension : stop // dimension] = quantized.codes
                             if column == region_start:
                                 region_scales.append(quantized.params["scales"])
                                 if quantized.params["zero"] is not None:
@@ -186,15 +192,21 @@ class ErrorFeedback(Quantizer):
             assert codec_parameters is not None and codec_metadata is not None
             if permutation is not None:
                 ctx.add_bits(width * math.ceil(math.log2(width)))
+            dimension = codec_parameters.get("dim")
+            parameters = {
+                "scales": torch.cat(region_scales, dim=1),
+                "values": codec_parameters["values"], "group": codec_parameters["group"],
+                "refit": refit_width,
+                "zero": torch.cat(region_zeros, dim=1) if region_zeros else None,
+                "permutation": permutation,
+            }
+            if dimension is not None:
+                parameters["dim"] = dimension
             return Q(
-                codes=encoded, bits=total_bits, codec="feedback", decode=decode_feedback,
-                params={
-                    "scales": torch.cat(region_scales, dim=1),
-                    "values": codec_parameters["values"], "group": codec_parameters["group"],
-                    "refit": refit_width,
-                    "zero": torch.cat(region_zeros, dim=1) if region_zeros else None,
-                    "permutation": permutation,
-                },
+                codes=encoded, bits=total_bits,
+                codec="feedback" if dimension is None else "vector_feedback",
+                decode=decode_feedback if dimension is None else decode_vector_scaled,
+                params=parameters,
                 metadata=codec_metadata,
             )
         if trellis_parts and len(trellis_parts) == width // self.step:

@@ -149,7 +149,7 @@ def run_block_passes(
                 full_name = f"{prefix}.{name}".strip(".")
                 quantized = model.quantized[full_name]
                 storage_formats = dict(quantized.metadata.get("parameter_formats", {}))
-                if quantized.codec in {"scaled", "feedback"}:
+                if quantized.codec in {"scaled", "feedback", "vector_scaled", "vector_feedback"}:
                     storage_formats["scales"] = quantized.metadata.get("scale_fmt", "fp32")
                     storage_formats["zero"] = quantized.metadata.get("scale_fmt", "fp32")
                 for parameter_name, format in storage_formats.items():

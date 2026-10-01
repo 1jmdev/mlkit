@@ -1,7 +1,7 @@
 import torch
 
 import mlkit as mk
-from mlkit.quantization.lattice import absolute_points, e8p_points
+from mlkit.quantization.lattice import absolute_points, e8p_points, nearest_e8p
 from mlkit.quantization.rotations import structured_transform
 
 
@@ -12,6 +12,8 @@ def test_e8p_point_set_and_optimal_search() -> None:
     assert len(points.unique(dim=0)) == 65536
     samples = torch.randn(17, 8, generator=torch.Generator().manual_seed(61))
     result = mk.grid.e8p()(samples)
+    indices = nearest_e8p(samples, return_indices=True)
+    torch.testing.assert_close(points.to(result.device)[indices], result, rtol=0, atol=0)
     reference = mk.nearest(samples, points, chunk=17)
     torch.testing.assert_close((samples - result).square().sum(1),
                                (samples - reference).square().sum(1), rtol=1e-5, atol=1e-6)

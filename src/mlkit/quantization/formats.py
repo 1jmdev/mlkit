@@ -10,6 +10,7 @@ from torch import Tensor
 
 from mlkit.quantization.context import Ctx
 from mlkit.quantization.grids import NF4_VALUES, Grid, grid
+from mlkit.quantization.operations import nearest
 from mlkit.quantization.protocol import Quantizer
 from mlkit.quantization.representation import Q
 
@@ -44,6 +45,26 @@ def decode_feedback(
     reconstruction = values[codes.long()] * scales[:, scale_indices]
     if zero is not None:
         reconstruction = reconstruction + zero[:, scale_indices]
+    return reconstruction if permutation is None else reconstruction[:, permutation.argsort()]
+
+
+def decode_vector_scaled(
+    codes: Tensor, *, scales: Tensor, values: Tensor | None, group: builtins.int,
+    dim: builtins.int, offset: builtins.int = 0, zero: Tensor | None = None,
+    refit: builtins.int | None = None, permutation: Tensor | None = None,
+) -> Tensor:
+    if values is None:
+        from mlkit.quantization.lattice import e8p_points
+
+        values = e8p_points().to(codes.device)
+    width = codes.shape[1] * dim
+    columns = torch.arange(offset, offset + width, device=codes.device)
+    positions = columns // group if refit is None else (
+        (columns // refit) * ((refit + group - 1) // group) + (columns % refit) // group
+    )
+    reconstruction = values[codes.long()].reshape(codes.shape[0], width) * scales[:, positions]
+    if zero is not None:
+        reconstruction = reconstruction + zero[:, positions]
     return reconstruction if permutation is None else reconstruction[:, permutation.argsort()]
 
 
@@ -103,6 +124,11 @@ class Scaled(Quantizer):
         padding = (-width) % group
         grouped = functional.pad(w.float(), (0, padding)).reshape(w.shape[0], -1, group)
         values = self.grid.values
+        if self.grid.dim > 1 and values is not None and self.grid.name != "e8p":
+            accounted = ctx.cache.setdefault("_mlkit_vector_codebooks", set())
+            if id(self.grid) not in accounted:
+                ctx.add_bits(values.numel() * values.element_size() * 8)
+                accounted.add(id(self.grid))
         maximum = 1.0 if values is None else float(values.abs().max())
         zero = None
         if self.asym:
@@ -181,6 +207,29 @@ class Scaled(Quantizer):
             else:
                 if value.shape[1] % self.grid.dim:
                     raise ValueError("column slices must align to the vector grid dimension")
+                if values is not None:
+                    vectors = normalized.reshape(-1, self.grid.dim)
+                    if self.grid.name == "e8p":
+                        from mlkit.quantization.lattice import nearest_e8p
+
+                        indices = nearest_e8p(vectors, return_indices=True)
+                    else:
+                        indices = nearest(vectors, values, return_indices=True)
+                    return Q(
+                        codes=indices.reshape(value.shape[0], -1).to(torch.int32), bits=bits,
+                        params={
+                            "scales": scales, "values": None if self.grid.name == "e8p" else
+                            values.to(value.device), "dim": self.grid.dim, "group": group,
+                            "offset": start, "zero": zero,
+                        },
+                        decode=decode_vector_scaled, codec="vector_scaled",
+                        metadata={
+                            "code_bits": self.grid.bits, "scale_fmt": self.scale_fmt,
+                            "trainable": ["scales"] + (
+                                [] if self.grid.name == "e8p" else ["values"]
+                            ),
+                        },
+                    )
                 rounded = self.grid(normalized.reshape(-1, self.grid.dim)).reshape_as(value)
             reconstruction = rounded * local_scales
             if zero is not None:

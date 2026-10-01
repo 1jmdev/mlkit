@@ -37,7 +37,7 @@ def e8p_points() -> Tensor:
     return torch.cat((lattice + 0.25, lattice - 0.25))
 
 
-def nearest_e8p(value: Tensor, *, chunk: int = 512) -> Tensor:
+def nearest_e8p(value: Tensor, *, chunk: int = 512, return_indices: bool = False) -> Tensor:
     if value.shape[-1] != 8 or chunk < 1:
         raise ValueError(
             "E8P quantization requires eight-dimensional vectors and positive chunk size"
@@ -48,6 +48,7 @@ def nearest_e8p(value: Tensor, *, chunk: int = 512) -> Tensor:
     outputs = []
     for samples in value.reshape(-1, 8).float().split(chunk):
         selected = torch.empty_like(samples)
+        selected_indices = torch.zeros(len(samples), device=value.device, dtype=torch.long)
         minimum_cost = torch.full((len(samples),), float("inf"), device=value.device)
         for shift in [-0.25, 0.25]:
             centered = samples - shift
@@ -69,8 +70,16 @@ def nearest_e8p(value: Tensor, *, chunk: int = 512) -> Tensor:
                 mismatch[rows, indices], -1.0, 1.0
             )
             reconstructed = magnitudes[indices] * corrected_signs + shift
+            sign_codes = ((corrected_signs[:, :7] < 0).long()
+                          * (1 << torch.arange(7, device=value.device))).sum(1)
+            codes = indices * 128 + sign_codes + (32768 if shift < 0 else 0)
             improved = best_cost < minimum_cost
             selected = torch.where(improved[:, None], reconstructed, selected)
+            selected_indices = torch.where(improved, codes, selected_indices)
             minimum_cost = torch.minimum(minimum_cost, best_cost)
-        outputs.append(selected)
+        outputs.append(selected_indices if return_indices else selected)
+    if return_indices:
+        return torch.cat(outputs).reshape(value.shape[:-1]) if outputs else torch.empty(
+            value.shape[:-1], device=value.device, dtype=torch.long
+        )
     return torch.cat(outputs).reshape_as(value).to(value.dtype) if outputs else value.clone()
