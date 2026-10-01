@@ -11,7 +11,7 @@ from torch import Tensor
 from mlkit.quantization.context import Ctx
 from mlkit.quantization.grids import NF4_VALUES, Grid, grid
 from mlkit.quantization.operations import nearest
-from mlkit.quantization.protocol import Quantizer
+from mlkit.quantization.protocol import FittedRounder, Quantizer
 from mlkit.quantization.representation import Q
 
 
@@ -153,7 +153,7 @@ class Scaled(Quantizer):
             scale_bits * groups * (2 if self.asym else 1)
         )
 
-    def fit(self, w: Tensor, ctx: Ctx) -> Callable[[Tensor, slice], Q]:
+    def fit(self, w: Tensor, ctx: Ctx) -> FittedRounder:
         if w.ndim != 2 or not w.is_floating_point() or not torch.isfinite(w).all():
             raise ValueError("scaled requires a finite floating-point weight matrix")
         width = w.shape[1]
@@ -273,7 +273,8 @@ class Scaled(Quantizer):
                 reconstruction = reconstruction + zero[:, positions]
             return Q(reconstruction, bits=bits)
 
-        return round_columns
+        scalar_grid = self.grid if self.grid.dim == 1 and self.grid.values is not None else None
+        return FittedRounder(round_columns, scalar_grid=scalar_grid)
 
     def __repr__(self) -> str:
         return f"scaled({self.grid!r}, group={self.group}, scale={self.scale!r})"

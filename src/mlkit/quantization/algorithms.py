@@ -9,9 +9,9 @@ from torch import Tensor
 
 from mlkit.quantization.codecs import compose, deterministic_signs, registered
 from mlkit.quantization.context import Ctx, copy_cache, layer_seed
-from mlkit.quantization.formats import Scaled, decode_feedback, decode_vector_scaled
+from mlkit.quantization.formats import decode_feedback, decode_vector_scaled
 from mlkit.quantization.operations import proxy_loss
-from mlkit.quantization.protocol import Quantizer, fit_quantizer
+from mlkit.quantization.protocol import FittedRounder, Quantizer, fit_quantizer
 from mlkit.quantization.representation import Q, as_q
 from mlkit.quantization.rotations import structured_transform
 
@@ -109,14 +109,16 @@ class ErrorFeedback(Quantizer):
             )
             if fitted_context is not ctx:
                 ctx.add_bits(fitted_context._additional_bits)
+            scalar_grid = rounder.scalar_grid if isinstance(rounder, FittedRounder) else None
             use_fused = (
                 working.device.type == "cuda" and self.backend != "torch" and self.step == 1
-                and isinstance(self.inner, Scaled) and self.inner.grid.name.startswith("int")
+                and scalar_grid is not None and scalar_grid.bits <= 8
+                and scalar_grid.values is not None and 1 <= scalar_grid.values.numel() <= 256
             )
             if self.backend == "triton" and not use_fused:
-                raise ValueError("fused GPTQ requires CUDA, step=1, and a scaled integer grid")
+                raise ValueError("fused GPTQ requires CUDA, step=1, and a native scalar rounder")
             if use_fused:
-                assert isinstance(self.inner, Scaled)
+                assert scalar_grid is not None
                 from mlkit.runtime.kernels.error_feedback import round_tile
 
                 initial = rounder(working[:, region_start:region_stop], slice(None))
@@ -137,7 +139,8 @@ class ErrorFeedback(Quantizer):
                         working, upper, initial.params["scales"], initial.params["zero"],
                         output, encoded, errors, region_start=region_start,
                         tile_start=tile_start, group=initial.params["group"],
-                        bits=self.inner.grid.bits,
+                        bits=scalar_grid.bits, values=initial.params["values"],
+                        integer_grid=scalar_grid.name.startswith("int"),
                     )
                     working[:, tile_stop:] -= errors @ upper[tile_start:tile_stop, tile_stop:]
                 continue

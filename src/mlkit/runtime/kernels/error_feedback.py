@@ -12,6 +12,7 @@ def round_feedback_tile(
     upper,
     scales,
     zeros,
+    values,
     output,
     encoded,
     errors,
@@ -25,6 +26,9 @@ def round_feedback_tile(
     minimum_code: tl.constexpr,
     maximum_code: tl.constexpr,
     has_zero: tl.constexpr,
+    integer_grid: tl.constexpr,
+    codebook_size: tl.constexpr,
+    codebook_tile: tl.constexpr,
     row_tile: tl.constexpr,
     column_tile: tl.constexpr,
 ):
@@ -41,11 +45,30 @@ def round_feedback_tile(
         zero_values = tl.full((row_tile,), 0, tl.float32)
         if has_zero:
             zero_values = tl.load(zeros + scale_indices, rows < output_width, other=0)
-        codes = libdevice.nearbyint((original - zero_values) / scale_values)
-        codes = tl.minimum(tl.maximum(codes, minimum_code), maximum_code)
-        reconstruction = codes * scale_values + zero_values
+        normalized = libdevice.div_rn(original - zero_values, scale_values)
+        if integer_grid:
+            codes = libdevice.nearbyint(normalized)
+            codes = tl.minimum(tl.maximum(codes, minimum_code), maximum_code)
+            indices = codes - minimum_code
+            reconstruction = codes * scale_values + zero_values
+        else:
+            entries = tl.arange(0, codebook_tile)
+            representable = tl.load(values + entries, entries < codebook_size, other=0)
+            distances = tl.where(
+                entries[None, :] < codebook_size,
+                tl.abs(normalized[:, None] - representable[None, :]),
+                float("inf"),
+            )
+            minimum_distance = tl.min(distances, axis=1)
+            indices = tl.min(
+                tl.where(distances == minimum_distance[:, None], entries[None, :], codebook_tile),
+                axis=1,
+            )
+            indices = tl.minimum(indices, codebook_size - 1)
+            selected = tl.load(values + indices)
+            reconstruction = selected * scale_values + zero_values
         diagonal = tl.load(upper + (tile_start + column) * input_width + tile_start + column)
-        error = (original - reconstruction) / diagonal
+        error = libdevice.div_rn(original - reconstruction, diagonal)
         coefficients = tl.load(
             upper + (tile_start + column) * input_width + tile_start + columns,
             (columns > column) & (columns < tile_width), other=0,
@@ -54,7 +77,7 @@ def round_feedback_tile(
         tl.store(output + rows * input_width + tile_start + column,
                        reconstruction, rows < output_width)
         tl.store(encoded + rows * input_width + tile_start + column,
-                       (codes - minimum_code).to(tl.int32), rows < output_width)
+                       indices.to(tl.int32), rows < output_width)
         tl.store(errors + rows * tile_width + column, error, rows < output_width)
 
 
@@ -71,12 +94,15 @@ def round_tile(
     tile_start: int,
     group: int,
     bits: int,
+    values: Tensor,
+    integer_grid: bool,
 ) -> None:
     row_tile = 16
     round_feedback_tile[(triton.cdiv(working.shape[0], row_tile),)](
-        working, upper, scales, zeros, output, encoded, errors,
+        working, upper, scales, zeros, values, output, encoded, errors,
         working.shape[1], working.shape[0], region_start, tile_start,
         errors.shape[1], group, scales.shape[1], -(2 ** (bits - 1)), 2 ** (bits - 1) - 1,
-        zeros is not None, row_tile, triton.next_power_of_2(errors.shape[1]),
+        zeros is not None, integer_grid, values.numel(), triton.next_power_of_2(values.numel()),
+        row_tile, triton.next_power_of_2(errors.shape[1]),
         num_warps=4, enable_fp_fusion=False,
     )

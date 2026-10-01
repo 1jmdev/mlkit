@@ -1,5 +1,6 @@
 """A learned scalar format that works with RTN, GPTQ and incoherence processing."""
 
+import argparse
 from collections.abc import Callable
 
 import torch
@@ -25,24 +26,33 @@ class LearnedCodebook(mk.Quantizer):
                            scale=lambda values: mk.absmax(values))
         fitted = format.fit(weight, context)
 
-        def round_columns(values: Tensor, columns: slice) -> mk.Q:
-            result = fitted(values, columns)
-            result.metadata["trainable"] = ["scales", "values"]
-            result.metadata["parameter_formats"] = {"values": "fp16"}
-            return result
-
-        return round_columns
+        return fitted.with_metadata(
+            trainable=["scales", "values"], parameter_formats={"values": "fp16"}
+        )
 
 
 def main() -> None:
-    weight = torch.randn(128, 256, device="cuda")
-    inputs = torch.randn(512, 256, device="cuda")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model")
+    arguments = parser.parse_args()
     format = LearnedCodebook()
     algorithms = {
         "rtn": format,
         "gptq": mk.gptq(format, refit=None),
         "incoherent-gptq": mk.incoherent(mk.gptq(format, refit=None)),
     }
+    if arguments.model is not None:
+        model = mk.load(arguments.model, dtype="float16")
+        calibration = mk.data("wikitext2", n=4, seq=128, seed=17)
+        evaluation = mk.data("wikitext2", n=4, seq=128, split="test")
+        recipes = [mk.Recipe(weights=mk.int(4, group=64), name="uniform-int4")]
+        recipes.extend(
+            mk.Recipe(weights=algorithm, name=name) for name, algorithm in algorithms.items()
+        )
+        mk.compare(model, recipes, calib=calibration, data=evaluation, budget="full", seq=128)
+        return
+    weight = torch.randn(128, 256, device="cuda")
+    inputs = torch.randn(512, 256, device="cuda")
     for name, algorithm in algorithms.items():
         context = mk.Ctx(name=name, X=inputs)
         quantized = algorithm(weight, context)

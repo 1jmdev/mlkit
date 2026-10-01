@@ -8,7 +8,29 @@ from typing import Any
 from torch import Tensor
 
 from mlkit.quantization.context import Ctx
+from mlkit.quantization.grids import Grid
 from mlkit.quantization.representation import Q, as_q
+
+
+class FittedRounder:
+    """A callable fitted format retaining optional native CUDA rounding information."""
+
+    def __init__(
+        self, function: Callable[[Tensor, slice], Q], *, scalar_grid: Grid | None = None,
+    ) -> None:
+        self.function = function
+        self.scalar_grid = scalar_grid
+
+    def __call__(self, values: Tensor, columns: slice) -> Q:
+        return self.function(values, columns)
+
+    def with_metadata(self, **metadata: Any) -> "FittedRounder":
+        def round_columns(values: Tensor, columns: slice) -> Q:
+            result = self(values, columns)
+            result.metadata.update(metadata)
+            return result
+
+        return FittedRounder(round_columns, scalar_grid=self.scalar_grid)
 
 
 class Quantizer:
