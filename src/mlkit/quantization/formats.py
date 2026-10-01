@@ -264,9 +264,7 @@ class Scaled(Quantizer):
                         decode=decode_vector_scaled, codec="vector_scaled",
                         metadata={
                             "code_bits": self.grid.bits, "scale_fmt": self.scale_fmt,
-                            "trainable": ["scales"] + (
-                                [] if self.grid.name == "e8p" else ["values"]
-                            ),
+                            "trainable": ["scales"],
                         },
                     )
                 rounded = self.grid(normalized.reshape(-1, self.grid.dim)).reshape_as(value)

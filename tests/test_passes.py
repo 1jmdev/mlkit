@@ -61,3 +61,16 @@ def test_half_precision_normalization_finetuning_stays_finite() -> None:
     assert torch.isfinite(converted(inputs[0])).all()
     assert not torch.equal(converted.module[0].weight, original_norm)
     assert converted.module[0].weight.dtype == dtype
+
+
+def test_shared_vector_grid_stays_fixed_during_block_finetuning() -> None:
+    codebook = torch.randn(16, 2)
+    format = mk.scaled(mk.grid.vector(codebook), group=8)
+    inputs = [torch.randn(4, 8) for _ in range(2)]
+    module = nn.Sequential(nn.Linear(8, 8, bias=False), nn.Linear(8, 8, bias=False))
+    converted = mk.quantize(
+        module, mk.Recipe(weights=format, passes=[mk.finetune(steps=3, bs=1)]), calib=inputs
+    )
+    for representation in converted.quantized.values():
+        torch.testing.assert_close(representation.params["values"], codebook.cpu(), rtol=0, atol=0)
+    assert sum(record.bits for record in converted.layer_reports) == 2 * (2 * 64 + 16 * 8) + 1024
