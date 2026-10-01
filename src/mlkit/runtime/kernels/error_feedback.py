@@ -3,7 +3,7 @@
 import triton
 import triton.language as tl
 from torch import Tensor
-from triton.tl.extra.cuda import libdevice
+from triton.language.extra.cuda import libdevice
 
 
 @triton.jit
