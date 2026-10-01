@@ -100,7 +100,8 @@ def data(
             )
         else:
             raise ValueError("unknown dataset; use wikitext2, c4, redpajama, or a list of strings")
-        texts = (record["text"] for record in corpus)
+        texts = (["\n\n".join(corpus["text"])] if name == "wikitext2"
+                 else (record["text"] for record in corpus))
         dataset_name = name
         if n is None and name != "wikitext2" and streaming:
             raise ValueError("unbounded streaming evaluation requires an explicit n")
@@ -113,7 +114,8 @@ def data(
     for text in texts:
         if not text.strip():
             continue
-        encoded = tokenizer(text + "\n\n", add_special_tokens=False, return_attention_mask=False)
+        separator = "" if dataset_name == "wikitext2" else "\n\n"
+        encoded = tokenizer(text + separator, add_special_tokens=False, return_attention_mask=False)
         tokens = encoded["input_ids"]
         token_parts.extend(tokens)
         count += len(tokens)
