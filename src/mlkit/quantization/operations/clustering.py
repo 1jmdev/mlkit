@@ -13,7 +13,7 @@ def kmeans(
     weights: Tensor | None = None,
     iters: int = 20,
     seed: int = 0,
-    chunk: int = 1024,
+    chunk: int | None = None,
 ) -> Tensor:
     """Deterministic weighted Lloyd iterations for scalar or vector codebooks."""
     scalar = value.ndim == 1
