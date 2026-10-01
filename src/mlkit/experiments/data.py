@@ -115,7 +115,9 @@ def data(
         if not text.strip():
             continue
         separator = "" if dataset_name == "wikitext2" else "\n\n"
-        encoded = tokenizer(text + separator, add_special_tokens=False, return_attention_mask=False)
+        encoded = tokenizer(
+            text + separator, add_special_tokens=False, return_attention_mask=False, verbose=False
+        )
         tokens = encoded["input_ids"]
         token_parts.extend(tokens)
         count += len(tokens)
