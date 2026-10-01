@@ -1,6 +1,7 @@
 """Differentiable block passes for codecs and normalization parameters."""
 
 import functools
+import time
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -10,8 +11,8 @@ from torch import Tensor, nn
 
 from mlkit.quantization.context import layer_seed
 from mlkit.quantization.representation import Q
-from mlkit.runtime.engine import BlockCall, CalibrationSession
-from mlkit.runtime.models import QModel, extract_hidden, preserve_input_processing
+from mlkit.runtime.engine import BlockCall, CalibrationSession, synchronize
+from mlkit.runtime.models import BlockPassReport, QModel, extract_hidden, preserve_input_processing
 
 
 class ConfiguredPass:
@@ -139,10 +140,31 @@ def run_block_passes(
     for parameter in norm_params(block):
         parameter.requires_grad_(True)
     context = BlockPassCtx(block, original, calls, targets, qparams, index)
+    block_device = next(block.parameters()).device
     try:
         with torch.enable_grad():
             for operation in passes:
+                history_start = len(context.loss_history)
+                synchronize(block_device)
+                start = time.perf_counter()
                 operation(block, context)
+                synchronize(block_device)
+                history = context.loss_history[history_start:]
+                trainable_parameters = context.qparams + norm_params(block)
+                unique_parameters = {
+                    id(parameter): parameter for parameter in trainable_parameters
+                }
+                model.pass_reports.append(BlockPassReport(
+                    name=getattr(operation, "__name__", type(operation).__name__),
+                    block_idx=index,
+                    seconds=time.perf_counter() - start,
+                    trainable_elements=sum(
+                        parameter.numel() for parameter in unique_parameters.values()
+                    ),
+                    steps=len(history) if history else None,
+                    initial_loss=history[0] if history else None,
+                    final_loss=history[-1] if history else None,
+                ))
     finally:
         with torch.no_grad():
             for name, module, replacement in replacements:

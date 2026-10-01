@@ -100,6 +100,17 @@ class LayerReport:
         return None if self.bits is None else self.bits / self.elements
 
 
+@dataclass
+class BlockPassReport:
+    name: str
+    block_idx: int
+    seconds: float
+    trainable_elements: int
+    steps: int | None
+    initial_loss: float | None
+    final_loss: float | None
+
+
 class Model(nn.Module):
     def __init__(
         self,
@@ -192,6 +203,7 @@ class QModel(Model):
         super().__init__(*args, **kwargs)
         self.quantized: dict[str, Q] = {}
         self.layer_reports: list[LayerReport] = []
+        self.pass_reports: list[BlockPassReport] = []
         self.activation_handles: list[Any] = []
         self.activation_specs: dict[str, dict[str, Any] | None] = {}
         self.kv_spec: dict[str, Any] | None = None

@@ -30,7 +30,7 @@ from mlkit.runtime.inference import (
     export_torchao,
     optimize,
 )
-from mlkit.runtime.models import ArchitectureAdapter, Model, QModel, adapter, load
+from mlkit.runtime.models import ArchitectureAdapter, BlockPassReport, Model, QModel, adapter, load
 from mlkit.runtime.passes import BlockPassCtx, block_pass, finetune, model_pass, norm_params
 from mlkit.runtime.serialization import codec, load_checkpoint, save
 from mlkit.runtime.transforms import fuse_norms, rotate, smooth
@@ -46,6 +46,7 @@ __all__ = [
     "unpack", "BlockPassCtx", "block_pass", "finetune", "model_pass", "norm_params",
     "BenchmarkResult", "PackedLinear", "benchmark", "benchmark_model", "export_torchao", "optimize",
     "DataSource",
+    "BlockPassReport",
     "Trellis", "one_mad", "trellis", "viterbi",
     "fuse_norms", "rotate", "smooth",
 ]

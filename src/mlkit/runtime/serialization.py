@@ -19,7 +19,7 @@ from mlkit.quantization.codecs import decoder, registered
 from mlkit.quantization.context import Ctx
 from mlkit.quantization.packing import pack, unpack
 from mlkit.quantization.representation import Q
-from mlkit.runtime.models import LayerReport, QModel, weight_name
+from mlkit.runtime.models import BlockPassReport, LayerReport, QModel, weight_name
 from mlkit.runtime.online import install_activation_quantization, restore_quantizer
 
 FORMAT_VERSION = 1
@@ -133,6 +133,7 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
             "architecture": "transformers" if configuration is not None else "external",
             "dtype": str(model.dtype).removeprefix("torch."),
             "layers": layers, "reports": [asdict(record) for record in model.layer_reports],
+            "pass_reports": [asdict(record) for record in model.pass_reports],
             "logical_bpw": model.bpw, "model_bpw": model.model_bpw,
             "parameter_accounting": model._parameter_accounting,
             "transforms": getattr(model.module, "_mlkit_transforms", []),
@@ -248,6 +249,9 @@ def load_checkpoint(
     converted.layer_reports = [
         LayerReport(**(record | {"shape": tuple(record["shape"])}))
         for record in manifest["reports"]
+    ]
+    converted.pass_reports = [
+        BlockPassReport(**record) for record in manifest.get("pass_reports", [])
     ]
     if manifest.get("parameter_accounting") is not None:
         converted._parameter_accounting = tuple(manifest["parameter_accounting"])

@@ -7,7 +7,7 @@ import mlkit as mk
 pytestmark = [pytest.mark.cuda, pytest.mark.usefixtures("cuda_tensors")]
 
 
-def test_codec_parameters_are_trained_and_cached() -> None:
+def test_codec_parameters_are_trained_and_cached(tmp_path) -> None:
     torch.manual_seed(23)
     model = nn.Sequential(nn.Linear(16, 16), nn.ReLU(), nn.Linear(16, 8))
     calibration = [torch.randn(4, 16) for _ in range(4)]
@@ -34,6 +34,19 @@ def test_codec_parameters_are_trained_and_cached() -> None:
     assert isinstance(converted.module[0], nn.Linear)
     assert converted.module[0].weight.requires_grad
     torch.testing.assert_close(converted.module[0].weight.cpu(), converted.quantized["0"].w)
+    record = converted.pass_reports[0]
+    assert record.steps == 30
+    assert record.seconds > 0
+    assert record.trainable_elements > 0
+    assert record.initial_loss is not None and record.final_loss is not None
+    assert record.final_loss < record.initial_loss
+    expected_loss = float(mk.proxy_loss(model[0].weight, converted.module[0].weight).detach())
+    assert converted.layer_reports[0].loss == expected_loss
+    converted.save(tmp_path / "finetuned")
+    restored = mk.load(tmp_path / "finetuned", model=lambda: nn.Sequential(
+        nn.Linear(16, 16), nn.ReLU(), nn.Linear(16, 8)
+    ))
+    assert restored.pass_reports == converted.pass_reports
 
 
 def test_block_pass_configuration() -> None:

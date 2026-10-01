@@ -373,6 +373,19 @@ def quantize(
             from mlkit.runtime.passes import run_block_passes
 
             run_block_passes(converted, index, block, original_block, session, definition.passes)
+            reports = {report.name: report for report in converted.layer_reports}
+            with torch.no_grad():
+                for relative_name, layer in layers:
+                    name = f"{prefix}.{relative_name}".strip(".")
+                    if name not in reports:
+                        continue
+                    original_layer = original_block.get_submodule(relative_name)
+                    assert isinstance(original_layer, nn.Linear)
+                    hessian = contexts[name]._stats.get("H")
+                    loss_context = Ctx(H=hessian) if hessian is not None else None
+                    reports[name].loss = float(proxy_loss(
+                        original_layer.weight, layer.weight, loss_context
+                    ))
         session.propagate(index, block)
         for key in ["_mlkit_sibling_modules", "_mlkit_layer_algorithms", "_mlkit_awq_results"]:
             shared_cache.pop(key, None)
