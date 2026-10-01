@@ -107,9 +107,13 @@ def ppl(
     token_limit = max_tokens if max_tokens is not None else (20_000 if budget == "fast" else None)
     if token_limit is not None and token_limit < 1:
         raise ValueError("max_tokens must be positive")
-    dataset_name = data if isinstance(data, str) else "tokens"
+    dataset_name = data if isinstance(data, str) else getattr(data, "name", "tokens")
+    if not isinstance(dataset_name, str):
+        dataset_name = "text"
     if isinstance(data, str):
         windows = None if token_limit is None else math.ceil(token_limit / (seq - 1))
+        if data == "c4" and windows is None:
+            windows = 256
         data = tokenize_data(
             data, n=windows, seq=seq, split="test", tokenizer=wrapped.tokenizer, seed=seed
         )
@@ -122,6 +126,7 @@ def ppl(
     wrapped.eval()
     negative_log_likelihood = torch.zeros((), dtype=torch.float64, device=wrapped.device)
     count = 0
+    maximum_sequence_length = 0
     synchronize(wrapped.device)
     start = time.perf_counter()
     try:
@@ -129,6 +134,9 @@ def ppl(
             for batch in batches:
                 if not isinstance(batch, Mapping) or "input_ids" not in batch:
                     raise ValueError("perplexity data must contain input_ids tensors")
+                maximum_sequence_length = max(
+                    maximum_sequence_length, batch["input_ids"].shape[-1]
+                )
                 inputs = {name: value.to(wrapped.device) for name, value in batch.items()
                           if name in {"input_ids", "attention_mask", "position_ids"}}
                 labels = batch.get("labels", batch["input_ids"]).to(wrapped.device).clone()
@@ -158,7 +166,8 @@ def ppl(
     total_loss = float(negative_log_likelihood)
     perplexity = math.exp(total_loss / count) if total_loss / count < 709 else float("inf")
     result = PerplexityResult(
-        perplexity, count, total_loss, time.perf_counter() - start, str(dataset_name), seq
+        perplexity, count, total_loss, time.perf_counter() - start,
+        dataset_name, maximum_sequence_length,
     )
     return result if return_details else result.perplexity
 

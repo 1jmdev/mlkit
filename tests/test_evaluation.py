@@ -6,6 +6,7 @@ import torch.nn.functional as functional
 from torch import nn
 
 import mlkit as mk
+from mlkit.experiments import evaluation
 
 pytestmark = [pytest.mark.cuda, pytest.mark.usefixtures("cuda_tensors")]
 
@@ -28,6 +29,7 @@ def test_perplexity_matches_cross_entropy() -> None:
     score = mk.ppl(model, data=tokens, budget="full", return_details=True)
     assert abs(score.perplexity - float(expected.detach())) < 1e-5
     assert score.tokens == 32
+    assert score.sequence_length == 17
     assert model.training
 
 
@@ -54,3 +56,23 @@ def test_comparison_table_and_sweep(tmp_path) -> None:
     table = mk.sweep(model, lambda bits: mk.int(bits, group=4), bits=[2, 3],
                      options={"data": tokens, "calib": None, "print_table": False})
     assert len(table) == 3
+
+
+def test_full_c4_evaluation_uses_a_bounded_protocol(monkeypatch) -> None:
+    requested_windows = []
+
+    def tokenize(name, n, **options):
+        requested_windows.append((name, n))
+        return mk.TokenBatches([{"input_ids": torch.randint(19, (1, 8))}], name=name)
+
+    monkeypatch.setattr(evaluation, "tokenize_data", tokenize)
+    score = mk.ppl(CausalModel(), data="c4", budget="full", return_details=True)
+    assert requested_windows == [("c4", 256)]
+    assert score.dataset == "c4"
+    assert score.sequence_length == 8
+
+
+def test_perplexity_preserves_the_token_batch_dataset_name() -> None:
+    batches = mk.TokenBatches([{"input_ids": torch.randint(19, (1, 8))}], name="validation")
+    score = mk.ppl(CausalModel(), data=batches, return_details=True)
+    assert score.dataset == "validation"
