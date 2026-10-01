@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as functional
 from torch import Tensor
 
+from mlkit.kernels import scalar_encode
 from mlkit.kernels.activation_reconstruction import reconstruct
 from mlkit.quantization.codecs.scaled import decode_scaled, decode_vector_scaled
 from mlkit.quantization.context import Ctx
@@ -17,6 +18,8 @@ from mlkit.quantization.operations.search import nearest
 from mlkit.quantization.protocol import FittedRounder, Quantizer, ScalarRounding
 from mlkit.quantization.representation import Q
 
+FUSED_CODEBOOK_LIMIT = 256
+
 
 def single_precision_reciprocal(value: float) -> float:
     """The FP32 reciprocal, so that host arithmetic and fused kernels agree bit for bit."""
@@ -24,7 +27,37 @@ def single_precision_reciprocal(value: float) -> float:
     return float(one / torch.tensor(value, dtype=torch.float32))
 
 
+def group_extrema(weight: Tensor, group: int) -> tuple[Tensor, Tensor]:
+    """Minimum and maximum of every row group; a partial final group holds only its columns."""
+    rows, width = weight.shape
+    whole = width - width % group
+    minima, maxima = [], []
+    if whole:
+        grouped = weight[:, :whole].reshape(rows, -1, group)
+        minima.append(grouped.amin(-1))
+        maxima.append(grouped.amax(-1))
+    if whole < width:
+        remainder = weight[:, whole:]
+        minima.append(remainder.amin(-1, keepdim=True))
+        maxima.append(remainder.amax(-1, keepdim=True))
+    return torch.cat(minima, dim=1), torch.cat(maxima, dim=1)
+
+
+def nearest_codes(normalized: Tensor, values: Tensor) -> Tensor:
+    """Indices of the nearest ascending codebook values; ties select the lower value."""
+    upper = torch.searchsorted(values, normalized.contiguous()).clamp_max(values.numel() - 1)
+    lower = (upper - 1).clamp_min(0)
+    select_lower = (normalized - values[lower]).abs() <= (normalized - values[upper]).abs()
+    return torch.where(select_lower, lower, upper)
+
+
 class Scaled(Quantizer):
+    """A grid applied to row groups that each carry a scale and, optionally, an offset.
+
+    Scalar grids with explicit values round to the nearest value. On CUDA they are
+    fitted and encoded by fused kernels that reproduce the tensor reference exactly.
+    """
+
     def __init__(
         self,
         grid: Grid,
@@ -51,7 +84,7 @@ class Scaled(Quantizer):
         self.scale_fmt = scale_fmt
         self.asym = asym
         self.search_steps = search_steps
-        self._activation_values: dict[torch.device, Tensor] = {}
+        self._device_values: dict[torch.device, Tensor] = {}
         values = None if grid.values is None or grid.dim != 1 else grid.values.detach().cpu()
         self._value_minimum = 0.0 if values is None else float(values.min())
         self._value_maximum = 0.0 if values is None else float(values.max())
@@ -62,6 +95,15 @@ class Scaled(Quantizer):
         # Scales are a range multiplied by one of these reciprocals, on the host and in kernels.
         self._magnitude_reciprocal = single_precision_reciprocal(magnitude)
         self._range_reciprocal = single_precision_reciprocal(value_range) if asym else 1.0
+
+    def values_on(self, device: torch.device) -> Tensor:
+        """The grid values on ``device``, transferred once."""
+        values = self._device_values.get(device)
+        if values is None:
+            assert self.grid.values is not None
+            values = self.grid.values.to(device).contiguous()
+            self._device_values[device] = values
+        return values
 
     def reconstruct_activations(self, value: Tensor) -> Tensor:
         """Reconstruct online scalar grids without codec allocation or host synchronization."""
@@ -76,14 +118,9 @@ class Scaled(Quantizer):
         if not supported:
             return self(value.float()).w.to(value.dtype)
         assert isinstance(self.scale_fmt, str)
-        values = self._activation_values.get(value.device)
-        if values is None:
-            assert self.grid.values is not None
-            values = self.grid.values.to(value.device).contiguous()
-            self._activation_values[value.device] = values
         return reconstruct(
             value.contiguous(),
-            values,
+            self.values_on(value.device),
             self.group or value.shape[1],
             self.scale_fmt,
             self.asym,
@@ -107,74 +144,42 @@ class Scaled(Quantizer):
         )
 
     def fit(self, w: Tensor, ctx: Ctx) -> FittedRounder:
-        if w.ndim != 2 or not w.is_floating_point() or not torch.isfinite(w).all():
+        if w.ndim != 2 or not w.is_floating_point():
             raise ValueError("scaled requires a finite floating-point weight matrix")
-        width = w.shape[1]
+        rows, width = w.shape
         group = width if self.group is None else min(self.group, width)
         if group % self.grid.dim:
             raise ValueError("group width must be divisible by the vector grid dimension")
-        padding = (-width) % group
-        grouped = functional.pad(w.float(), (0, padding)).reshape(w.shape[0], -1, group)
-        # Padding completes the final group and must not influence its range or its error.
-        occupied = None
-        if padding:
-            positions = torch.arange(grouped.shape[1] * group, device=w.device)
-            occupied = (positions < width).reshape(1, -1, group)
         values = self.grid.values
         if self.grid.dim > 1 and values is not None and self.grid.name != "e8p":
             accounted = ctx.cache.setdefault("_mlkit_vector_codebooks", set())
             if id(self.grid) not in accounted:
                 ctx.add_bits(values.numel() * values.element_size() * 8)
                 accounted.add(id(self.grid))
-        zero = None
-        if self.asym:
-            if occupied is None:
-                minimum, maximum = grouped.amin(-1), grouped.amax(-1)
-            else:
-                minimum = grouped.masked_fill(~occupied, float("inf")).amin(-1)
-                maximum = grouped.masked_fill(~occupied, -float("inf")).amax(-1)
-            scales = (maximum - minimum).clamp_min(1e-12) * self._range_reciprocal
-            zero = minimum - self._value_minimum * scales
-        elif callable(self.scale):
-            scales = self.scale(grouped.reshape(-1, group)).reshape(w.shape[0], -1)
-        else:
-            scales = grouped.abs().amax(-1).clamp_min(1e-12) * self._magnitude_reciprocal
+        weight = w.float()
+        scales, zero = self._initial_scales(weight, group)
         scales, scale_bits = store_scale(scales, self.scale_fmt)
-
-        def round_grouped(value: Tensor, candidate: Tensor) -> Tensor:
-            normalized = value / candidate[..., None]
-            if self.grid.dim > 1:
-                normalized = normalized.reshape(*normalized.shape[:-1], -1, self.grid.dim)
-                return self.grid(normalized).reshape_as(value) * candidate[..., None]
-            return self.grid(normalized) * candidate[..., None]
-
-        def group_error(value: Tensor, candidate: Tensor) -> Tensor:
-            error = (round_grouped(value, candidate) - value).square()
-            return (error if occupied is None else error * occupied).sum(-1)
-
+        scalar_values = None
+        if self.grid.dim == 1 and values is not None:
+            scalar_values = self.values_on(w.device)
+        # Fused kernels encode one byte per code and need a tile inside every group.
+        tile = None
+        if w.is_cuda and scalar_values is not None and len(scalar_values) <= FUSED_CODEBOOK_LIMIT:
+            tile = scalar_encode.tile_for(group)
         if self.scale == "mse":
-            centered = grouped if zero is None else grouped - zero[..., None]
-            selected = scales.clone()
-            best_error = group_error(centered, scales)
-            for fraction in torch.linspace(0.5, 1.0, self.search_steps).tolist():
-                candidate, _ = store_scale(scales * fraction, self.scale_fmt)
-                error = group_error(centered, candidate)
-                improved = error < best_error
-                selected = torch.where(improved, candidate, selected)
-                best_error = torch.minimum(best_error, error)
-            scales = selected
+            scales = self._search_scales(weight, scales, zero, group, scalar_values, tile)
         side_bits = scales.numel() * scale_bits * (2 if zero is not None else 1)
         if zero is not None:
             magnitude, _ = store_scale(zero.abs().clamp_min(1e-12), self.scale_fmt)
             zero = magnitude * zero.sign()
         scalar = None
-        if self.grid.dim == 1 and values is not None:
+        if scalar_values is not None:
             scalar = ScalarRounding(
                 grid=self.grid,
                 scales=scales,
                 zero=zero,
                 group=group,
-                values=values.to(w.device),
+                values=scalar_values,
                 bits=self.grid.bits * w.numel() + side_bits,
                 metadata={
                     "code_bits": self.grid.bits,
@@ -189,37 +194,32 @@ class Scaled(Quantizer):
                 raise ValueError(
                     "rounder columns must describe a contiguous slice of its fitted region"
                 )
-            positions = torch.arange(start, stop, device=value.device) // group
-            local_scales = scales[:, positions]
-            centered = value.float() if zero is None else value.float() - zero[:, positions]
-            normalized = centered / local_scales
             bits = (
                 self.grid.bits * value.numel() / self.grid.dim
                 + side_bits * value.shape[1] / width
             )
-            if self.grid.dim == 1:
-                rounded = self.grid(normalized)
-                if scalar is not None:
-                    if self.grid.integer:
-                        codes = rounded - self._value_minimum
-                    else:
-                        codes = torch.searchsorted(scalar.values, rounded.contiguous())
-                    storage_dtype = torch.uint8 if self.grid.bits <= 8 else torch.int32
-                    parameters: dict[str, Any] = {
+            if scalar is not None:
+                codes = self._scalar_codes(value, scalar, start, stop, tile)
+                return Q(
+                    bits=bits,
+                    codes=codes,
+                    params={
                         "scales": scales,
                         "values": scalar.values,
                         "group": group,
                         "offset": start,
                         "zero": zero,
-                    }
-                    return Q(
-                        bits=bits,
-                        codes=codes.to(storage_dtype),
-                        params=parameters,
-                        decode=decode_scaled,
-                        codec="scaled",
-                        metadata=scalar.metadata,
-                    )
+                    },
+                    decode=decode_scaled,
+                    codec="scaled",
+                    metadata=scalar.metadata,
+                )
+            positions = torch.arange(start, stop, device=value.device) // group
+            local_scales = scales[:, positions]
+            centered = value.float() if zero is None else value.float() - zero[:, positions]
+            normalized = centered / local_scales
+            if self.grid.dim == 1:
+                rounded = self.grid(normalized)
             else:
                 if value.shape[1] % self.grid.dim:
                     raise ValueError("column slices must align to the vector grid dimension")
@@ -256,6 +256,129 @@ class Scaled(Quantizer):
             return Q(reconstruction, bits=bits)
 
         return FittedRounder(round_columns, scalar=scalar)
+
+    def _initial_scales(self, weight: Tensor, group: int) -> tuple[Tensor, Tensor | None]:
+        """Unrounded group scales and offsets from the range of each group."""
+        rows, width = weight.shape
+        if callable(self.scale) and not self.asym:
+            if not torch.isfinite(weight).all():
+                raise ValueError("scaled requires a finite floating-point weight matrix")
+            padded = functional.pad(weight, (0, (-width) % group))
+            return self.scale(padded.reshape(-1, group)).reshape(rows, -1), None
+        minimum, maximum = group_extrema(weight, group)
+        # A group extremum is not finite exactly when one of its weights is not.
+        if not (torch.isfinite(minimum).all() and torch.isfinite(maximum).all()):
+            raise ValueError("scaled requires a finite floating-point weight matrix")
+        if self.asym:
+            scales = (maximum - minimum).clamp_min(1e-12) * self._range_reciprocal
+            return scales, minimum - self._value_minimum * scales
+        magnitude = torch.maximum(maximum, -minimum)
+        return magnitude.clamp_min(1e-12) * self._magnitude_reciprocal, None
+
+    def _search_scales(
+        self,
+        weight: Tensor,
+        scales: Tensor,
+        zero: Tensor | None,
+        group: int,
+        scalar_values: Tensor | None,
+        tile: int | None,
+    ) -> Tensor:
+        """Among shrunken candidates, the stored scale of every group with least squared error."""
+        fractions = torch.linspace(0.5, 1.0, self.search_steps, device=weight.device)
+        fused = (
+            tile is not None
+            and scalar_values is not None
+            and isinstance(self.scale_fmt, str)
+            and weight.is_contiguous()
+        )
+        if fused:
+            assert tile is not None and scalar_values is not None
+            assert isinstance(self.scale_fmt, str)
+            return scalar_encode.search_scales(
+                weight,
+                scales.contiguous(),
+                None if zero is None else zero.contiguous(),
+                scalar_values,
+                fractions,
+                group,
+                tile,
+                self.scale_fmt,
+                integer=self.grid.integer,
+                minimum=self._value_minimum,
+                maximum=self._value_maximum,
+            )
+        rows, width = weight.shape
+        padding = (-width) % group
+        grouped = functional.pad(weight, (0, padding)).reshape(rows, -1, group)
+        # Padding completes the final group and must not contribute to its error.
+        occupied = None
+        if padding:
+            positions = torch.arange(grouped.shape[1] * group, device=weight.device)
+            occupied = (positions < width).reshape(1, -1, group)
+        centered = grouped if zero is None else grouped - zero[..., None]
+
+        def group_error(candidate: Tensor) -> Tensor:
+            normalized = centered / candidate[..., None]
+            if self.grid.dim > 1:
+                vectors = normalized.reshape(*normalized.shape[:-1], -1, self.grid.dim)
+                rounded = self.grid(vectors).reshape_as(centered)
+            else:
+                rounded = self.grid(normalized)
+            error = (rounded * candidate[..., None] - centered).square()
+            return (error if occupied is None else error * occupied).sum(-1)
+
+        selected = scales.clone()
+        best_error = group_error(scales)
+        for fraction in fractions.tolist():
+            candidate, _ = store_scale(scales * fraction, self.scale_fmt)
+            error = group_error(candidate)
+            improved = error < best_error
+            selected = torch.where(improved, candidate, selected)
+            best_error = torch.minimum(best_error, error)
+        return selected
+
+    def _scalar_codes(
+        self,
+        value: Tensor,
+        scalar: ScalarRounding,
+        start: int,
+        stop: int,
+        tile: int | None,
+    ) -> Tensor:
+        """Codes of the nearest scalar grid values for columns ``start`` to ``stop``."""
+        # The kernel indexes scales from the first column of the fitted region.
+        fused = (
+            tile is not None
+            and start == 0
+            and value.is_cuda
+            and value.dtype == torch.float32
+            and value.is_contiguous()
+        )
+        if fused:
+            assert tile is not None
+            return scalar_encode.encode(
+                value,
+                scalar.scales,
+                scalar.zero,
+                scalar.values,
+                scalar.group,
+                tile,
+                integer=self.grid.integer,
+                minimum=self._value_minimum,
+                maximum=self._value_maximum,
+            )
+        positions = torch.arange(start, stop, device=value.device) // scalar.group
+        centered = value.float()
+        if scalar.zero is not None:
+            centered = centered - scalar.zero[:, positions]
+        normalized = centered / scalar.scales[:, positions]
+        if self.grid.integer:
+            codes = normalized.round().clamp(self._value_minimum, self._value_maximum)
+            codes = codes - self._value_minimum
+        else:
+            codes = nearest_codes(normalized, scalar.values)
+        return codes.to(torch.uint8 if self.grid.bits <= 8 else torch.int32)
 
     def __repr__(self) -> str:
         return f"scaled({self.grid!r}, group={self.group}, scale={self.scale!r})"
