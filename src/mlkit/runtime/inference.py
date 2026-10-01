@@ -14,7 +14,7 @@ from torch import Tensor, nn
 from mlkit.quantization.packing import pack
 from mlkit.quantization.representation import Q
 from mlkit.runtime.engine import forward_batch, synchronize
-from mlkit.runtime.models import Model, QModel
+from mlkit.runtime.models import Model, QModel, preserve_input_processing
 
 
 class PackedLinear(nn.Module):
@@ -64,6 +64,7 @@ class PackedLinear(nn.Module):
         ))
         self.grid_minimum = float(scalar_values[0])
         self.grid_step = float(differences[0]) if len(differences) else 1.0
+        preserve_input_processing(original, self)
 
     @property
     def weight(self) -> Tensor:

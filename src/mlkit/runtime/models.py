@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import torch
 from torch import Tensor, nn
+from torch.utils._pytree import tree_map
 
 from mlkit.quantization.representation import Q
 
@@ -119,11 +120,19 @@ class Model(nn.Module):
         self._initial_dtype = torch.float32 if first_parameter is None else first_parameter.dtype
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
-        return self.module(*args, **kwargs)
+        arguments, keywords = tree_map(
+            lambda value: value.to(self.device) if isinstance(value, Tensor) else value,
+            (args, kwargs),
+        )
+        return self.module(*arguments, **keywords)
 
     def generate(self, *args: Any, **kwargs: Any) -> Any:
         generate = cast(Callable[..., Any], self.module.generate)
-        return generate(*args, **kwargs)
+        arguments, keywords = tree_map(
+            lambda value: value.to(self.device) if isinstance(value, Tensor) else value,
+            (args, kwargs),
+        )
+        return generate(*arguments, **keywords)
 
     @property
     def device(self) -> torch.device:
@@ -241,3 +250,19 @@ def extract_hidden(output: Any) -> Tensor:
     if hasattr(output, "last_hidden_state"):
         return output.last_hidden_state
     raise TypeError("block output must be a tensor, tuple, or last_hidden_state result")
+
+
+def preserve_input_processing(original: nn.Module, replacement: nn.Module) -> None:
+    """Preserve online transforms when an inference or training layer is substituted."""
+    replacement._forward_pre_hooks = original._forward_pre_hooks.copy()
+    replacement._forward_pre_hooks_with_kwargs = original._forward_pre_hooks_with_kwargs.copy()
+    for name, value in original.named_buffers(recurse=False):
+        if name.startswith("_mlkit_"):
+            replacement.register_buffer(name, value.detach().clone())
+
+
+def module_device(module: nn.Module) -> torch.device:
+    tensor: Tensor | None = next(module.parameters(), None)
+    if tensor is None:
+        tensor = next(module.buffers(), None)
+    return torch.device("cuda") if tensor is None else tensor.device

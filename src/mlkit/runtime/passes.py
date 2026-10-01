@@ -11,7 +11,7 @@ from torch import Tensor, nn
 from mlkit.quantization.context import layer_seed
 from mlkit.quantization.representation import Q
 from mlkit.runtime.engine import BlockCall, CalibrationSession
-from mlkit.runtime.models import QModel, extract_hidden
+from mlkit.runtime.models import QModel, extract_hidden, preserve_input_processing
 
 
 class ConfiguredPass:
@@ -66,6 +66,7 @@ class CodecLinear(nn.Module):
                 quantized.params[name] = self.parameters_by_name[identifier]
             else:
                 self.constants[name] = value
+        preserve_input_processing(original, self)
 
     @property
     def weight(self) -> Tensor:

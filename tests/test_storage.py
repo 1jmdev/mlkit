@@ -44,6 +44,9 @@ def test_checkpoint_round_trip(tmp_path) -> None:
     with pytest.raises(FileExistsError):
         converted.save(directory)
     converted.save(directory, overwrite=True)
+    restored.save(tmp_path / "restored")
+    second_manifest = json.loads((tmp_path / "restored" / "mlkit.json").read_text())
+    assert second_manifest["tensor_bytes"] == manifest["tensor_bytes"]
 
 
 @pytest.mark.cuda

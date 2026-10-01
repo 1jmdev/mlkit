@@ -90,6 +90,10 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
                 layers[name] = {
                     "codec": quantized.codec, "shape": list(quantized.codes.shape),
                     "code_bits": precision, "bits": quantized.bits, "params": parameters,
+                    "metadata": {
+                        key: value for key, value in quantized.metadata.items()
+                        if isinstance(value, (str, int, float, bool, list, dict, type(None)))
+                    },
                 }
             else:
                 reconstruction = quantized.w.detach().cpu()
@@ -181,7 +185,7 @@ def load_checkpoint(
             quantized = Q(
                 codes=codes, params=parameters, decode=_CODECS[layer["codec"]],
                 codec=layer["codec"], bits=layer["bits"],
-                metadata={"code_bits": layer["code_bits"]},
+                metadata=layer.get("metadata", {}) | {"code_bits": layer["code_bits"]},
             )
         else:
             quantized = Q(tensors[f"{name}.reconstruction"], bits=layer["bits"])

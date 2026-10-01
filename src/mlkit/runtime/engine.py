@@ -16,7 +16,14 @@ from mlkit.quantization.context import Ctx
 from mlkit.quantization.operations import proxy_loss
 from mlkit.quantization.recipes import Recipe, normalize_recipe
 from mlkit.quantization.representation import as_q
-from mlkit.runtime.models import LayerReport, Model, QModel, architecture_adapter, extract_hidden
+from mlkit.runtime.models import (
+    LayerReport,
+    Model,
+    QModel,
+    architecture_adapter,
+    extract_hidden,
+    module_device,
+)
 from mlkit.runtime.statistics import StatisticAccumulator, StatisticsCache, model_fingerprint
 
 
@@ -48,14 +55,14 @@ class BlockCall:
         return self.kwargs["hidden_states"] if "hidden_states" in self.kwargs else self.args[0]
 
     def run(self, block: nn.Module) -> Any:
-        device = next(block.parameters()).device
+        device = module_device(block)
         arguments = map_tensors(self.args, lambda tensor: tensor.to(device))
         keywords = map_tensors(self.kwargs, lambda tensor: tensor.to(device))
         return block(*arguments, **keywords)
 
 
 def forward_batch(model: nn.Module, batch: Any) -> Any:
-    device = next(model.parameters()).device
+    device = module_device(model)
     batch = map_tensors(batch, lambda tensor: tensor.to(device))
     if isinstance(batch, Mapping):
         if hasattr(model, "config"):
