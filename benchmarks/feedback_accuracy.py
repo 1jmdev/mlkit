@@ -31,7 +31,7 @@ def main() -> None:
     )
     session = CalibrationSession(
         model, calibration, sequential=False, sample_rows=4096,
-        cache_dir=None, need_targets=False,
+        cache_dir=None, need_targets=False, selected_blocks=(arguments.block,),
     )
     block = model.blocks[arguments.block]
     prefix = model.architecture.block_name(arguments.block)

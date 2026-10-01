@@ -105,6 +105,21 @@ def test_pattern_order_and_per_layer_selector() -> None:
     assert converted.layer_reports[2].bpw == 6
 
 
+def test_selected_calibration_blocks_capture_only_requested_inputs() -> None:
+    wrapped = mk.Model(RepeatedModel())
+    inputs = torch.randn(2, 16)
+    session = CalibrationSession(
+        wrapped, [inputs], sequential=False, sample_rows=32, cache_dir=None,
+        need_targets=False, selected_blocks=(1,),
+    )
+    session.prepare()
+    assert session.block_calls(0) == []
+    assert session.block_calls(2) == []
+    with torch.no_grad():
+        expected = wrapped.blocks[0](inputs)
+    torch.testing.assert_close(session.block_calls(1)[0].hidden(), expected.cpu(), rtol=0, atol=0)
+
+
 def test_custom_statistics_and_disk_cache(tmp_path) -> None:
     model = RepeatedModel()
     calibration = [torch.randn(2, 16), torch.randn(3, 16)]

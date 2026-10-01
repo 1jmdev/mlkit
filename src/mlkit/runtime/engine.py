@@ -86,7 +86,13 @@ class CalibrationSession:
         cache_dir: str | Path | None,
         need_targets: bool,
         retain_history: bool = True,
+        selected_blocks: tuple[int, ...] | None = None,
     ) -> None:
+        if selected_blocks is not None:
+            if sequential:
+                raise ValueError("selected block capture requires nonsequential calibration")
+            if any(index < 0 or index >= len(model.blocks) for index in selected_blocks):
+                raise ValueError("selected calibration block index is outside the model")
         self.model = model
         self.calibration = calibration
         self.sequential = sequential
@@ -94,6 +100,7 @@ class CalibrationSession:
         self.cache_dir = cache_dir
         self.need_targets = need_targets
         self.retain_history = retain_history
+        self.selected_blocks = selected_blocks
         self.calls: list[list[BlockCall]] | None = None
         self.targets: list[list[Tensor]] = [[] for _ in model.blocks]
         self.requirements: dict[str, tuple[Callable | None, str]] = {}
@@ -140,6 +147,8 @@ class CalibrationSession:
             return transferred
 
         for index, block in enumerate(self.model.blocks):
+            if self.selected_blocks is not None and index not in self.selected_blocks:
+                continue
             def capture_inputs(
                 module: nn.Module,
                 arguments: tuple,

@@ -228,9 +228,19 @@ def probe(
     print_table: bool = True,
 ) -> Table:
     wrapped = model if isinstance(model, Model) else Model(model)
+    selected_blocks = tuple(
+        index for index, block in enumerate(wrapped.blocks)
+        if any(
+            isinstance(module, nn.Linear) and fnmatch.fnmatchcase(
+                f"{wrapped.architecture.block_name(index)}.{name}".strip("."), layers
+            )
+            for name, module in block.named_modules()
+        )
+    )
     session = CalibrationSession(
         wrapped, calib, sequential=False, sample_rows=4096,
         cache_dir=None if cache_dir is None else Path(cache_dir).expanduser(), need_targets=False,
+        selected_blocks=selected_blocks,
     )
     records = []
     for index, block in enumerate(wrapped.blocks):
