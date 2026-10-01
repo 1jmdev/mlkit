@@ -17,6 +17,11 @@ def main() -> None:
     parser.add_argument("--sequence", type=int, default=256)
     parser.add_argument("--calibration-batches", type=int, default=8)
     parser.add_argument("--evaluation-batches", type=int, default=16)
+    parser.add_argument("--full-evaluation", action="store_true")
+    parser.add_argument(
+        "--methods", nargs="+", default=["rtn-int4-g128", "nf4-g64", "gptq-int4-g128"],
+        choices=["rtn-int4-g128", "nf4-g64", "gptq-int4-g128"],
+    )
     parser.add_argument(
         "--output", type=Path, default=Path("benchmark_results/model_evaluation.json")
     )
@@ -24,7 +29,8 @@ def main() -> None:
     model = mk.load(arguments.model, dtype="float16")
     calibration = mk.data("wikitext2", n=arguments.calibration_batches, seq=arguments.sequence,
                           tokenizer=model.tokenizer, seed=17)
-    evaluation = mk.data("wikitext2", n=arguments.evaluation_batches, seq=arguments.sequence,
+    evaluation_batches = None if arguments.full_evaluation else arguments.evaluation_batches
+    evaluation = mk.data("wikitext2", n=evaluation_batches, seq=arguments.sequence,
                          tokenizer=model.tokenizer, split="test", seed=17)
     baseline = mk.ppl(model, data=evaluation, budget="full", seq=arguments.sequence,
                       return_details=True)
@@ -37,6 +43,8 @@ def main() -> None:
         "gptq-int4-g128": mk.gptq(mk.int(4, group=128)),
     }
     for name, quantization in methods.items():
+        if name not in arguments.methods:
+            continue
         start = time.perf_counter()
         converted = mk.quantize(model, quantization, calib=calibration, cache_dir=None)
         duration = time.perf_counter() - start
@@ -52,7 +60,7 @@ def main() -> None:
                 "gpu": torch.cuda.get_device_name(), "sequence": arguments.sequence,
                 "cuda": torch.version.cuda, "dtype": "float16", "seed": 17,
                 "calibration_batches": arguments.calibration_batches,
-                "evaluation_batches": arguments.evaluation_batches, "measurements": records}
+                "evaluation_batches": evaluation_batches, "measurements": records}
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(json.dumps(document, indent=2) + "\n")
 
