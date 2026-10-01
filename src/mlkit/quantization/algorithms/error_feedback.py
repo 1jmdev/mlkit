@@ -132,7 +132,7 @@ class ErrorFeedback(Quantizer):
                         output, encoded, errors, region_start=region_start,
                         tile_start=tile_start, group=initial.params["group"],
                         bits=scalar_grid.bits, values=initial.params["values"],
-                        integer_grid=scalar_grid.name.startswith("int"),
+                        integer_grid=scalar_grid.integer,
                     )
                     working[:, tile_stop:] -= errors @ upper[tile_start:tile_stop, tile_stop:]
                 continue

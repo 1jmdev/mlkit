@@ -18,6 +18,12 @@ from mlkit.quantization.protocol import FittedRounder, Quantizer
 from mlkit.quantization.representation import Q
 
 
+def single_precision_reciprocal(value: float) -> float:
+    """The FP32 reciprocal, so that host arithmetic and fused kernels agree bit for bit."""
+    one = torch.tensor(1.0, dtype=torch.float32)
+    return float(one / torch.tensor(value, dtype=torch.float32))
+
+
 class Scaled(Quantizer):
     def __init__(
         self,
@@ -49,7 +55,13 @@ class Scaled(Quantizer):
         values = None if grid.values is None or grid.dim != 1 else grid.values.detach().cpu()
         self._value_minimum = 0.0 if values is None else float(values.min())
         self._value_maximum = 0.0 if values is None else float(values.max())
-        self._value_absolute_maximum = 1.0 if values is None else float(values.abs().max())
+        magnitude = 1.0 if grid.values is None else float(grid.values.abs().max())
+        value_range = self._value_maximum - self._value_minimum
+        if asym and value_range <= 0:
+            raise ValueError("asymmetric quantization requires at least two distinct grid values")
+        # Scales are a range multiplied by one of these reciprocals, on the host and in kernels.
+        self._magnitude_reciprocal = single_precision_reciprocal(magnitude)
+        self._range_reciprocal = single_precision_reciprocal(value_range) if asym else 1.0
 
     def reconstruct_activations(self, value: Tensor) -> Tensor:
         """Reconstruct online scalar grids without codec allocation or host synchronization."""
@@ -75,10 +87,10 @@ class Scaled(Quantizer):
             self.group or value.shape[1],
             self.scale_fmt,
             self.asym,
-            self.grid.name.startswith("int"),
+            self.grid.integer,
             self._value_minimum,
             self._value_maximum,
-            self._value_absolute_maximum,
+            self._range_reciprocal if self.asym else self._magnitude_reciprocal,
         )
 
     def logical_bits(self, shape: tuple[int, int]) -> float:
@@ -103,24 +115,30 @@ class Scaled(Quantizer):
             raise ValueError("group width must be divisible by the vector grid dimension")
         padding = (-width) % group
         grouped = functional.pad(w.float(), (0, padding)).reshape(w.shape[0], -1, group)
+        # Padding completes the final group and must not influence its range or its error.
+        occupied = None
+        if padding:
+            positions = torch.arange(grouped.shape[1] * group, device=w.device)
+            occupied = (positions < width).reshape(1, -1, group)
         values = self.grid.values
         if self.grid.dim > 1 and values is not None and self.grid.name != "e8p":
             accounted = ctx.cache.setdefault("_mlkit_vector_codebooks", set())
             if id(self.grid) not in accounted:
                 ctx.add_bits(values.numel() * values.element_size() * 8)
                 accounted.add(id(self.grid))
-        maximum = 1.0 if values is None else float(values.abs().max())
         zero = None
         if self.asym:
-            assert values is not None
-            minimum_value, maximum_value = float(values.min()), float(values.max())
-            minimum, maximum_group = grouped.amin(-1), grouped.amax(-1)
-            scales = (maximum_group - minimum).clamp_min(1e-12) / (maximum_value - minimum_value)
-            zero = minimum - minimum_value * scales
+            if occupied is None:
+                minimum, maximum = grouped.amin(-1), grouped.amax(-1)
+            else:
+                minimum = grouped.masked_fill(~occupied, float("inf")).amin(-1)
+                maximum = grouped.masked_fill(~occupied, -float("inf")).amax(-1)
+            scales = (maximum - minimum).clamp_min(1e-12) * self._range_reciprocal
+            zero = minimum - self._value_minimum * scales
         elif callable(self.scale):
             scales = self.scale(grouped.reshape(-1, group)).reshape(w.shape[0], -1)
         else:
-            scales = grouped.abs().amax(-1).clamp_min(1e-12) / maximum
+            scales = grouped.abs().amax(-1).clamp_min(1e-12) * self._magnitude_reciprocal
         scales, scale_bits = store_scale(scales, self.scale_fmt)
 
         def round_grouped(value: Tensor, candidate: Tensor) -> Tensor:
@@ -130,13 +148,17 @@ class Scaled(Quantizer):
                 return self.grid(normalized).reshape_as(value) * candidate[..., None]
             return self.grid(normalized) * candidate[..., None]
 
+        def group_error(value: Tensor, candidate: Tensor) -> Tensor:
+            error = (round_grouped(value, candidate) - value).square()
+            return (error if occupied is None else error * occupied).sum(-1)
+
         if self.scale == "mse":
             centered = grouped if zero is None else grouped - zero[..., None]
             selected = scales.clone()
-            best_error = (round_grouped(centered, scales) - centered).square().sum(-1)
+            best_error = group_error(centered, scales)
             for fraction in torch.linspace(0.5, 1.0, self.search_steps).tolist():
                 candidate, _ = store_scale(scales * fraction, self.scale_fmt)
-                error = (round_grouped(centered, candidate) - centered).square().sum(-1)
+                error = group_error(centered, candidate)
                 improved = error < best_error
                 selected = torch.where(improved, candidate, selected)
                 best_error = torch.minimum(best_error, error)
@@ -164,7 +186,10 @@ class Scaled(Quantizer):
                 rounded = self.grid(normalized)
                 if values is not None:
                     local_values = values.to(device=value.device)
-                    codes = torch.searchsorted(local_values, rounded.contiguous())
+                    if self.grid.integer:
+                        codes = rounded - self._value_minimum
+                    else:
+                        codes = torch.searchsorted(local_values, rounded.contiguous())
                     storage_dtype = torch.uint8 if self.grid.bits <= 8 else torch.int32
                     parameters: dict[str, Any] = {
                         "scales": scales,

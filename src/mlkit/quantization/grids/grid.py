@@ -23,6 +23,7 @@ class Grid:
         *,
         values: Tensor | None = None,
         name: str = "custom",
+        integer: bool = False,
     ) -> None:
         if bits < 1 or dim < 1:
             raise ValueError("grid bits and dimension must be positive")
@@ -31,6 +32,8 @@ class Grid:
         self.dim = dim
         self.values = values
         self.name = name
+        # Consecutive integer values permit arithmetic rounding instead of a codebook search.
+        self.integer = integer
 
     def __call__(self, value: Tensor) -> Tensor:
         return self.function(value)
@@ -56,6 +59,7 @@ class GridFactory:
             bits,
             values=values,
             name=f"int{bits}",
+            integer=True,
         )
 
     def values(self, values: Tensor, *, bits: builtins.int | None = None) -> Grid:

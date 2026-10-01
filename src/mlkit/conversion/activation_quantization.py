@@ -25,6 +25,7 @@ def describe_quantizer(quantizer: Any) -> dict[str, Any] | None:
         "kind": "scaled",
         "bits": quantizer.grid.bits,
         "grid": quantizer.grid.name,
+        "integer": quantizer.grid.integer,
         "values": quantizer.grid.values.detach().cpu().tolist(),
         "group": quantizer.group,
         "scale": quantizer.scale,
@@ -37,7 +38,8 @@ def describe_quantizer(quantizer: Any) -> dict[str, Any] | None:
 def restore_quantizer(descriptor: dict[str, Any]) -> Scaled:
     if descriptor["kind"] != "scaled":
         raise ValueError(f"unsupported online quantizer {descriptor['kind']!r}")
-    if descriptor["grid"].startswith("int"):
+    # Checkpoints written before the explicit flag identify integer grids by name.
+    if descriptor.get("integer", descriptor["grid"].startswith("int")):
         representation = grid.int(descriptor["bits"])
     else:
         representation = grid.values(
