@@ -10,6 +10,8 @@ from mlkit.models.architecture import identify_siblings
 
 
 class StatisticAccumulator:
+    """A streaming reduction over layer inputs whose state stays on the input device."""
+
     def __init__(
         self,
         name: str,
@@ -24,20 +26,28 @@ class StatisticAccumulator:
         self.rows = 0
         self.total: Tensor | None = None
         self.samples: list[Tensor] = []
+        self.finalized = False
 
     def update(self, inputs: Tensor) -> None:
+        if self.finalized:
+            raise RuntimeError("a finalized statistic cannot accumulate further inputs")
         inputs = inputs.detach().reshape(-1, inputs.shape[-1]).float()
         rows = inputs.shape[0]
         if self.name == "X":
             remaining = self.sample_rows - self.rows
             if remaining > 0:
-                sample = inputs[:remaining].cpu()
+                sample = inputs[:remaining].clone()
                 self.samples.append(sample)
                 self.rows += len(sample)
             return
         if self.name == "H":
-            value = inputs.T @ inputs
-        elif self.name == "act_absmean":
+            if self.total is None:
+                self.total = inputs.T @ inputs
+            else:
+                self.total.addmm_(inputs.T, inputs)
+            self.rows += rows
+            return
+        if self.name == "act_absmean":
             value = inputs.abs().sum(0)
         elif self.name == "act_absmax":
             value = inputs.abs().amax(0)
@@ -56,17 +66,20 @@ class StatisticAccumulator:
         self.rows += rows
 
     def result(self) -> Tensor:
+        """Finalize the reduction in place; the accumulator accepts no further inputs."""
         if self.name == "X":
             if not self.samples:
                 raise ValueError("no calibration rows reached the selected layer")
             return torch.cat(self.samples)
         if self.total is None or self.rows == 0:
             raise ValueError("no calibration rows reached the selected layer")
-        if (self.name in {"H", "act_absmean"} or self.reduction == "mean") and (
-            self.name != "act_absmax"
-        ):
-            return (self.total / self.rows).cpu()
-        return self.total.cpu()
+        averaged = self.name in {"H", "act_absmean"} or (
+            self.reduction == "mean" and self.name != "act_absmax"
+        )
+        if averaged and not self.finalized:
+            self.total.div_(self.rows)
+        self.finalized = True
+        return self.total
 
 
 class BlockStatistics:
