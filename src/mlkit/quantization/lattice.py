@@ -37,12 +37,30 @@ def e8p_points() -> Tensor:
     return torch.cat((lattice + 0.25, lattice - 0.25))
 
 
-def nearest_e8p(value: Tensor, *, chunk: int = 512, return_indices: bool = False) -> Tensor:
+@functools.lru_cache(maxsize=8)
+def device_points(device: torch.device, *, absolute: bool = False) -> Tensor:
+    return (absolute_points() if absolute else e8p_points()).to(device)
+
+
+def nearest_e8p(
+    value: Tensor, *, chunk: int = 512, return_indices: bool = False, backend: str = "auto",
+) -> Tensor:
     if value.shape[-1] != 8 or chunk < 1:
         raise ValueError(
             "E8P quantization requires eight-dimensional vectors and positive chunk size"
         )
-    magnitudes = absolute_points().to(device=value.device)
+    if backend not in {"auto", "torch", "triton"}:
+        raise ValueError("E8P backend must be auto, torch or triton")
+    if value.is_cuda and backend != "torch":
+        from mlkit.runtime.kernels.lattice import search
+
+        indices = search(value, device_points(value.device, absolute=True))
+        if return_indices:
+            return indices
+        return device_points(value.device)[indices.long()].to(value.dtype)
+    if backend == "triton":
+        raise ValueError("fused E8P requires CUDA")
+    magnitudes = device_points(value.device, absolute=True)
     magnitude_norms = magnitudes.square().sum(1)
     magnitude_parities = magnitudes.sum(1).long() % 2
     outputs = []

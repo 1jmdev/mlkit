@@ -54,9 +54,9 @@ def decode_vector_scaled(
     refit: builtins.int | None = None, permutation: Tensor | None = None,
 ) -> Tensor:
     if values is None:
-        from mlkit.quantization.lattice import e8p_points
+        from mlkit.quantization.lattice import device_points
 
-        values = e8p_points().to(codes.device)
+        values = device_points(codes.device)
     width = codes.shape[1] * dim
     columns = torch.arange(offset, offset + width, device=codes.device)
     positions = columns // group if refit is None else (

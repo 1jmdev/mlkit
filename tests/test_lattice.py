@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 import mlkit as mk
@@ -33,3 +34,13 @@ def test_incoherence_on_non_power_of_two_dimensions() -> None:
     weights = torch.randn(28, 96)
     result = mk.incoherent(lambda w, ctx: mk.Q(w, bits=32 * w.numel()))(weights)
     torch.testing.assert_close(result.w, weights, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("cuda_tensors")
+def test_fused_lattice_search_has_the_reference_optimal_cost() -> None:
+    samples = torch.randn(1024, 8)
+    reference = nearest_e8p(samples, backend="torch")
+    result = nearest_e8p(samples, backend="triton")
+    torch.testing.assert_close((samples - result).square().sum(1),
+                               (samples - reference).square().sum(1), rtol=1e-5, atol=1e-5)
