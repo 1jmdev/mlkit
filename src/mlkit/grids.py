@@ -98,6 +98,27 @@ class GridFactory:
             torch.tensor(sorted(set(values))), bits=1 + exponent_bits + mantissa_bits
         )
 
+    def e8p(self) -> Grid:
+        from mlkit.lattice import e8p_points, nearest_e8p
+
+        return Grid(nearest_e8p, 16, 8, values=e8p_points(), name="e8p")
+
+    def trellis(
+        self, L: builtins.int = 12, k: builtins.int = 2, *, dim: builtins.int = 256,
+        code: Callable | None = None,
+    ) -> Grid:
+        from mlkit.trellis import one_mad, viterbi
+
+        if not 1 <= k <= min(8, L) or not 1 <= L <= 16 or dim < 1:
+            raise ValueError("invalid trellis state precision, transition precision, or dimension")
+        codes = (code or one_mad)(torch.arange(2**L))
+
+        def round_sequences(value: Tensor) -> Tensor:
+            parts = value.reshape(-1, dim).split(64)
+            return torch.cat([viterbi(part, codes, L, k) for part in parts]).reshape_as(value)
+
+        return Grid(round_sequences, k * dim + L - k, dim, name=f"trellis-{L}-{k}")
+
 
 grid = GridFactory()
 
