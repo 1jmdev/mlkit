@@ -54,6 +54,21 @@ def nearest(
     if not codebook.shape[0] or chunk <= 0 or codebook_chunk <= 0:
         raise ValueError("codebook and chunk sizes must be nonempty and positive")
     codebook = codebook.to(value.device)
+    if value.shape[1] == 1:
+        ordered, permutation = codebook[:, 0].float().sort(stable=True)
+        samples = value[:, 0].float().contiguous()
+        right = torch.searchsorted(ordered, samples).clamp_max(len(ordered) - 1)
+        left = (right - 1).clamp_min(0)
+        first_occurrences = torch.searchsorted(ordered, ordered)
+        left_indices = permutation[first_occurrences[left]]
+        right_indices = permutation[first_occurrences[right]]
+        left_distance = (samples - ordered[left]).abs()
+        right_distance = (samples - ordered[right]).abs()
+        select_left = (left_distance < right_distance) | (
+            (left_distance == right_distance) & (left_indices < right_indices)
+        )
+        indices = torch.where(select_left, left_indices, right_indices)
+        return indices if return_indices else codebook[indices].to(value.dtype)
     index_parts = []
     for samples in value.float().split(chunk):
         minimum = torch.full((len(samples),), float("inf"), device=value.device)
@@ -91,21 +106,31 @@ def kmeans(
     if samples.ndim != 2 or not 1 <= k <= len(samples) or iters < 1:
         raise ValueError("kmeans requires a matrix, 1 <= k <= sample count, and iters >= 1")
     samples = samples.float()
+    if not torch.isfinite(samples).all():
+        raise ValueError("kmeans samples must be finite")
     generator = torch.Generator(device=value.device).manual_seed(seed)
     initial = torch.randperm(len(samples), device=value.device, generator=generator)[:k]
     centers = samples[initial].clone()
     importance = torch.ones(len(samples), device=value.device) if weights is None else weights
     importance = importance.reshape(-1).to(device=value.device, dtype=torch.float32)
-    if len(importance) != len(samples) or (importance < 0).any():
-        raise ValueError("weights must be nonnegative with one value per sample")
+    if (len(importance) != len(samples) or (importance < 0).any()
+            or not torch.isfinite(importance).all()):
+        raise ValueError("weights must be finite and nonnegative with one value per sample")
     for _ in range(iters):
         assignments = nearest(samples, centers, chunk=chunk, return_indices=True)
-        totals = torch.zeros_like(centers)
-        counts = torch.zeros(k, device=value.device)
-        totals.index_add_(0, assignments, samples * importance[:, None])
-        counts.index_add_(0, assignments, importance)
+        order = assignments.argsort(stable=True)
+        cluster_sizes = torch.bincount(assignments, minlength=k)
+        ordered_importance = importance[order]
+        totals = torch.segment_reduce(
+            samples[order] * ordered_importance[:, None], "sum", lengths=cluster_sizes
+        )
+        cluster_weights = torch.segment_reduce(
+            ordered_importance, "sum", lengths=cluster_sizes
+        )
         centers = torch.where(
-            counts[:, None] > 0, totals / counts[:, None].clamp_min(1e-12), centers
+            cluster_weights[:, None] > 0,
+            totals / cluster_weights[:, None].clamp_min(1e-12),
+            centers,
         )
     return centers[:, 0].sort().values if scalar else centers
 

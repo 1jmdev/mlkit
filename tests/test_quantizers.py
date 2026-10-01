@@ -128,6 +128,34 @@ def test_scalar_and_vector_search() -> None:
     assert torch.equal(indices, expected_indices)
 
 
+def test_scalar_vector_search_preserves_original_order_ties() -> None:
+    samples = torch.tensor([[0.0], [1.0], [-1.0], [3.0], [-3.0]])
+    codebook = torch.tensor([[2.0], [-2.0], [-2.0], [2.0], [0.0]])
+    expected = (samples - codebook.T).square().argmin(1)
+    actual = mk.nearest(samples, codebook, return_indices=True)
+    assert torch.equal(actual, expected)
+
+
+def test_weighted_scalar_kmeans_matches_known_centroids() -> None:
+    samples = torch.tensor([-4.0, -2.0, 8.0, 10.0])
+    weights = torch.tensor([1.0, 3.0, 3.0, 1.0])
+    centers = mk.kmeans(samples, k=2, weights=weights, iters=10)
+    torch.testing.assert_close(centers, torch.tensor([-2.5, 8.5]), rtol=0, atol=0)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("cuda_tensors")
+@pytest.mark.parametrize("dimension", [1, 8])
+def test_weighted_kmeans_is_reproducible_on_cuda(dimension: int) -> None:
+    samples = torch.randn(4096, dimension)
+    if dimension == 1:
+        samples = samples[:, 0]
+    weights = torch.rand(4096)
+    expected = mk.kmeans(samples, k=16, weights=weights, iters=3, seed=79)
+    actual = mk.kmeans(samples, k=16, weights=weights, iters=3, seed=79)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
 def test_best_of_isolates_nested_side_information_accounting() -> None:
     weight = torch.randn(8, 16)
 
