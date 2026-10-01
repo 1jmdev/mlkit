@@ -10,7 +10,7 @@ import torch
 from torch import nn
 
 import mlkit as mk
-from mlkit.runtime.engine import BlockStatistics, CalibrationSession
+from mlkit.calibration import BlockStatistics, CalibrationSession
 
 
 def main() -> None:

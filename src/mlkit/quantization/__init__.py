@@ -1,1 +1,1 @@
-"""MLKit quantization components."""
+"""Quantization primitives: representations, grids, formats, codecs, algorithms and recipes."""

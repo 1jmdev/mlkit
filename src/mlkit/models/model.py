@@ -1,7 +1,7 @@
-"""Model wrappers and extensible architecture discovery."""
+"""Model wrappers that place modules on CUDA and record quantization results."""
 
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 
@@ -9,106 +9,10 @@ import torch
 from torch import Tensor, nn
 from torch.utils._pytree import tree_map
 
+from mlkit.models.architecture import ArchitectureAdapter, architecture_adapter
+from mlkit.models.module_utilities import weight_name
+from mlkit.models.reports import BlockPassReport, LayerReport
 from mlkit.quantization.representation import Q
-
-
-class ArchitectureAdapter:
-    """Access repeated blocks without coupling formats to a transformer family."""
-
-    def __init__(self, model: nn.Module, block_path: str | None = None) -> None:
-        self.model = model
-        self.block_path = block_path or self.discover_blocks(model)
-
-    @staticmethod
-    def discover_blocks(model: nn.Module) -> str | None:
-        for path in ("model.layers", "transformer.h", "gpt_neox.layers", "model.decoder.layers"):
-            try:
-                sequence = model.get_submodule(path)
-            except AttributeError:
-                continue
-            if isinstance(sequence, (nn.ModuleList, nn.Sequential)):
-                return path
-        return None
-
-    @property
-    def blocks(self) -> Sequence[nn.Module]:
-        if self.block_path is None:
-            return (self.model,)
-        sequence = self.model.get_submodule(self.block_path)
-        if not isinstance(sequence, (nn.ModuleList, nn.Sequential)):
-            raise TypeError("architecture block path must identify a ModuleList or Sequential")
-        return list(sequence)
-
-    def block_name(self, index: int) -> str:
-        return "" if self.block_path is None else f"{self.block_path}.{index}"
-
-    @property
-    def norms(self) -> list[nn.Module]:
-        return [
-            module for module in self.model.modules()
-            if isinstance(module, nn.LayerNorm) or "rmsnorm" in type(module).__name__.lower()
-        ]
-
-    @property
-    def residual_readers(self) -> list[nn.Linear]:
-        suffixes = {"q_proj", "k_proj", "v_proj", "gate_proj", "up_proj", "lm_head"}
-        return [
-            module for name, module in self.model.named_modules()
-            if isinstance(module, nn.Linear) and name.split(".")[-1] in suffixes
-        ]
-
-    @property
-    def residual_writers(self) -> list[nn.Linear]:
-        suffixes = {"o_proj", "down_proj"}
-        return [
-            module for name, module in self.model.named_modules()
-            if isinstance(module, nn.Linear) and name.split(".")[-1] in suffixes
-        ]
-
-
-_ADAPTER_FACTORIES: dict[str, Callable[[nn.Module], ArchitectureAdapter]] = {}
-
-
-def adapter(
-    model_type: str,
-) -> Callable[[Callable[[nn.Module], ArchitectureAdapter]], Callable]:
-    def register(factory: Callable[[nn.Module], ArchitectureAdapter]) -> Callable:
-        _ADAPTER_FACTORIES[model_type] = factory
-        return factory
-
-    return register
-
-
-def architecture_adapter(model: nn.Module) -> ArchitectureAdapter:
-    model_type = getattr(getattr(model, "config", None), "model_type", "")
-    factory = _ADAPTER_FACTORIES.get(model_type, ArchitectureAdapter)
-    return factory(model)
-
-
-@dataclass
-class LayerReport:
-    name: str
-    shape: tuple[int, int]
-    bits: float | None
-    elements: int
-    loss: float
-    seconds: float
-    method: str
-
-    @property
-    def bpw(self) -> float | None:
-        return None if self.bits is None else self.bits / self.elements
-
-
-@dataclass
-class BlockPassReport:
-    name: str
-    block_idx: int
-    seconds: float
-    trainable_elements: int
-    steps: int | None
-    initial_loss: float | None
-    final_loss: float | None
 
 
 class Model(nn.Module):
@@ -248,59 +152,7 @@ class QModel(Model):
         return records
 
     def save(self, path: str | Path, **options: Any) -> None:
-        from mlkit.runtime.serialization import save
+        # Checkpoints depend on this wrapper, so the convenience entry point imports lazily.
+        from mlkit.checkpoints.saving import save
 
         save(self, path, **options)
-
-
-def load(
-    name: str | Path,
-    dtype: str | torch.dtype = "auto",
-    **options: Any,
-) -> Model:
-    path = Path(name)
-    if (path / "mlkit.json").is_file():
-        from mlkit.runtime.serialization import load_checkpoint
-
-        return load_checkpoint(path, **options)
-    try:
-        from transformers import AutoModelForCausalLM, AutoTokenizer
-    except ImportError as error:
-        raise ImportError("Hugging Face loading requires uv add 'mlkit[transformers]'") from error
-    selected_dtype = getattr(torch, dtype) if isinstance(dtype, str) and dtype != "auto" else dtype
-    module: nn.Module = AutoModelForCausalLM.from_pretrained(
-        str(name), dtype=selected_dtype, **options
-    )
-    module.cuda().eval()
-    tokenizer = AutoTokenizer.from_pretrained(str(name), trust_remote_code=False)
-    return Model(module, tokenizer, name=str(name))
-
-
-def extract_hidden(output: Any) -> Tensor:
-    if isinstance(output, Tensor):
-        return output
-    if isinstance(output, (tuple, list)):
-        return output[0]
-    if hasattr(output, "last_hidden_state"):
-        return output.last_hidden_state
-    raise TypeError("block output must be a tensor, tuple, or last_hidden_state result")
-
-
-def preserve_input_processing(original: nn.Module, replacement: nn.Module) -> None:
-    """Preserve online transforms when an inference or training layer is substituted."""
-    replacement._forward_pre_hooks = original._forward_pre_hooks.copy()
-    replacement._forward_pre_hooks_with_kwargs = original._forward_pre_hooks_with_kwargs.copy()
-    for name, value in original.named_buffers(recurse=False):
-        if name.startswith("_mlkit_"):
-            replacement.register_buffer(name, value.detach().clone())
-
-
-def weight_name(module_name: str) -> str:
-    return f"{module_name}.weight" if module_name else "weight"
-
-
-def module_device(module: nn.Module) -> torch.device:
-    tensor: Tensor | None = next(module.parameters(), None)
-    if tensor is None:
-        tensor = next(module.buffers(), None)
-    return torch.device("cuda") if tensor is None else tensor.device

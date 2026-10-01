@@ -6,7 +6,7 @@ import torch
 from torch import nn
 
 import mlkit as mk
-from mlkit.runtime.engine import CalibrationSession
+from mlkit.calibration import CalibrationSession
 
 pytestmark = [pytest.mark.cuda, pytest.mark.usefixtures("cuda_tensors")]
 

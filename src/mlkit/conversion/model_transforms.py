@@ -6,11 +6,11 @@ from typing import Any, cast
 import torch
 from torch import Tensor, nn
 
-from mlkit.experiments.data import DataSource, data, normalize_batches
+from mlkit.calibration.data import DataSource, data, normalize_batches
+from mlkit.calibration.session import forward_batch
+from mlkit.models.model import Model
 from mlkit.quantization.context import layer_seed
 from mlkit.quantization.operations import rht
-from mlkit.runtime.engine import forward_batch
-from mlkit.runtime.models import Model
 
 
 def normalization_groups(model: Model) -> list[tuple[nn.Module, list[nn.Linear]]]:

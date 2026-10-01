@@ -2,7 +2,7 @@ import pytest
 import torch
 
 import mlkit as mk
-from mlkit.runtime.statistics import StatisticAccumulator
+from mlkit.calibration import StatisticAccumulator
 
 
 @pytest.mark.integration

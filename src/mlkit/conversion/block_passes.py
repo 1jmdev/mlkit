@@ -9,10 +9,13 @@ import torch
 import torch.nn.functional as functional
 from torch import Tensor, nn
 
+from mlkit.calibration.session import BlockCall, CalibrationSession
+from mlkit.models.model import QModel
+from mlkit.models.module_utilities import extract_hidden, preserve_input_processing
+from mlkit.models.reports import BlockPassReport
 from mlkit.quantization.context import layer_seed
 from mlkit.quantization.representation import Q
-from mlkit.runtime.engine import BlockCall, CalibrationSession, synchronize
-from mlkit.runtime.models import BlockPassReport, QModel, extract_hidden, preserve_input_processing
+from mlkit.timing import synchronize
 
 
 class ConfiguredPass:
