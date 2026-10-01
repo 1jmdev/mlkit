@@ -3,7 +3,7 @@
 import builtins
 from typing import Any
 
-from mlkit.quantization.formats.scaled import Scaled, scaled
+from mlkit.quantization.formats.grouped_scaling import Scaled, scaled
 from mlkit.quantization.grids import NF4_VALUES, grid
 
 

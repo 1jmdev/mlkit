@@ -10,8 +10,8 @@ import torch
 import torch.nn.functional as functional
 from torch import Tensor, nn
 
-from mlkit.calibration.data import DataSource, normalize_batches
-from mlkit.calibration.data import data as tokenize_data
+from mlkit.calibration.token_batches import DataSource, normalize_batches
+from mlkit.calibration.token_batches import data as tokenize_data
 from mlkit.models.model import Model
 from mlkit.timing import synchronize
 

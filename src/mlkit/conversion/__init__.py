@@ -16,6 +16,7 @@ from mlkit.conversion.block_passes import (
     run_block_passes,
 )
 from mlkit.conversion.key_value_quantization import install_kv_quantization
+from mlkit.conversion.model_conversion import quantize
 from mlkit.conversion.model_transforms import (
     fuse_norms,
     install_transform,
@@ -23,7 +24,6 @@ from mlkit.conversion.model_transforms import (
     rotate,
     smooth,
 )
-from mlkit.conversion.quantize import quantize
 
 __all__ = [
     "ActivationHook",

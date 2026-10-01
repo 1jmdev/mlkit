@@ -8,7 +8,7 @@ from typing import Any
 
 from torch import nn
 
-from mlkit.conversion.quantize import quantize
+from mlkit.conversion.model_conversion import quantize
 from mlkit.evaluation.perplexity import ppl
 from mlkit.evaluation.tables import Table
 from mlkit.models.model import Model

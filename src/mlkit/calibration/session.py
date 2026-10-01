@@ -10,8 +10,8 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
-from mlkit.calibration.data import DataSource, TokenBatches, data, normalize_batches
 from mlkit.calibration.statistics_cache import StatisticsCache, model_fingerprint
+from mlkit.calibration.token_batches import DataSource, TokenBatches, data, normalize_batches
 from mlkit.models.model import Model
 from mlkit.models.module_utilities import extract_hidden, module_device
 

@@ -6,8 +6,8 @@ from typing import Any, cast
 import torch
 from torch import Tensor, nn
 
-from mlkit.calibration.data import DataSource, data, normalize_batches
 from mlkit.calibration.session import forward_batch
+from mlkit.calibration.token_batches import DataSource, data, normalize_batches
 from mlkit.models.model import Model
 from mlkit.quantization.context import layer_seed
 from mlkit.quantization.operations import rht
