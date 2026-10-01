@@ -129,13 +129,15 @@ class Ctx:
     def derive(
         self,
         provider: Callable[[str, Callable[[Tensor], Tensor] | None, str], Tensor],
+        **overrides: Any,
     ) -> "Ctx":
         """A context for transformed weights whose statistics come from ``provider``.
 
-        Algorithms that permute or rotate the weight columns use this to supply the
-        inner quantizer with statistics expressed in the transformed basis.
+        Algorithms that permute, rotate or rescale the weight columns use this to
+        supply the inner quantizer with statistics expressed in the transformed
+        basis. Statistics are computed only when the inner quantizer reads them.
         """
-        derived = self.replace()
+        derived = self.replace(**overrides)
         derived._stats = {}
         derived._provider = provider
         return derived

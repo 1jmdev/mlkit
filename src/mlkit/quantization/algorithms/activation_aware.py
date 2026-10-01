@@ -1,5 +1,7 @@
 """Activation-aware channel scale search, optionally shared across sibling projections."""
 
+from collections.abc import Callable
+
 import torch
 from torch import Tensor
 
@@ -8,6 +10,22 @@ from mlkit.quantization.context import Ctx, copy_cache
 from mlkit.quantization.operations.losses import proxy_loss
 from mlkit.quantization.protocol import Quantizer, QuantizerFunction
 from mlkit.quantization.representation import Q, as_q
+
+
+class ChannelScaledStatistics:
+    """Supplies calibration statistics of inputs divided by per-channel scales."""
+
+    def __init__(self, ctx: Ctx, scales: Tensor) -> None:
+        self.ctx = ctx
+        self.scales = scales
+
+    def __call__(self, name: str, function: Callable | None, reduction: str) -> Tensor:
+        value = self.ctx.stat(name, function, reduction)
+        if name == "H":
+            return value / self.scales[:, None] / self.scales[None, :]
+        if name in {"X", "act_absmean", "act_absmax"}:
+            return value / self.scales
+        return value
 
 
 class ActivationAware(Quantizer):
@@ -36,19 +54,18 @@ class ActivationAware(Quantizer):
             for name in siblings
         }
         importance = ctx.act_absmean.to(w.device).clamp_min(1e-5)
-        hessian = ctx.H.to(w.device)
         selected = None
         minimum_loss = float("inf")
         for alpha in torch.linspace(0, 1, self.grid).tolist():
             scales = importance.pow(alpha)
             scales /= (scales.max() * scales.min()).sqrt()
             scales = scales.clamp(2**-24, 65504).half().float()
-            transformed_hessian = hessian / scales[:, None] / scales[None, :]
+            statistics = ChannelScaledStatistics(ctx, scales)
             trial_cache = copy_cache(ctx.cache)
             candidates = {}
             loss = 0.0
             for index, (name, weight) in enumerate(weights.items()):
-                scaled_context = ctx.replace(H=transformed_hessian, cache=trial_cache, name=name)
+                scaled_context = ctx.derive(statistics, cache=trial_cache, name=name)
                 candidate = as_q(self.inner(weight * scales, scaled_context))
                 reconstruction = candidate.w / scales
                 if candidate.codes is not None and registered(candidate.codec):
@@ -57,7 +74,7 @@ class ActivationAware(Quantizer):
                 else:
                     candidate = Q(reconstruction, bits=candidate.bits)
                 scale_bits = 16 * scales.numel() if index == 0 else 0
-                candidates[name] = (candidate, scaled_context._additional_bits + scale_bits)
+                candidates[name] = (candidate, scaled_context.additional_bits + scale_bits)
                 loss += float(proxy_loss(weight, reconstruction, ctx))
             if loss < minimum_loss:
                 selected = candidates
