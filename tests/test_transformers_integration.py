@@ -6,10 +6,11 @@ import mlkit as mk
 
 @pytest.mark.integration
 @pytest.mark.cuda
-def test_downloaded_llama_conversion(tmp_path) -> None:
+@pytest.mark.parametrize("dtype", ["float32", "float16"])
+def test_downloaded_llama_conversion(tmp_path, dtype: str) -> None:
     if not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    model = mk.load("hf-internal-testing/tiny-random-LlamaForCausalLM")
+    model = mk.load("hf-internal-testing/tiny-random-LlamaForCausalLM", dtype=dtype)
     generator = torch.Generator().manual_seed(37)
     batches = [{"input_ids": torch.randint(100, 2000, (1, 32), generator=generator)}
                for _ in range(3)]

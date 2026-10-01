@@ -137,6 +137,7 @@ def load_checkpoint(
     if manifest.get("format_version") != FORMAT_VERSION:
         raise ValueError("unsupported mlkit checkpoint format version")
     tokenizer = None
+    external_architecture = model is not None
     if model is None:
         if manifest["architecture"] != "transformers":
             raise ValueError(
@@ -147,13 +148,16 @@ def load_checkpoint(
         except ImportError as error:
             raise ImportError("checkpoint loading requires 'mlkit[transformers]'") from error
         configuration = AutoConfig.from_pretrained(directory, trust_remote_code=False)
-        model = AutoModelForCausalLM.from_config(configuration, trust_remote_code=False)
+        model = AutoModelForCausalLM.from_config(
+            configuration, trust_remote_code=False, dtype=getattr(torch, manifest["dtype"])
+        )
         if (directory / "tokenizer_config.json").exists():
             tokenizer = AutoTokenizer.from_pretrained(directory, trust_remote_code=False)
     elif not isinstance(model, nn.Module):
         model = model()
     assert isinstance(model, nn.Module)
-    model.to(dtype=getattr(torch, manifest["dtype"]))
+    if external_architecture:
+        model.to(dtype=getattr(torch, manifest["dtype"]))
     tensors = load_file(str(directory / "weights.safetensors"))
     state = {name.removeprefix("state."): value for name, value in tensors.items()
              if name.startswith("state.")}
