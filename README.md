@@ -110,3 +110,7 @@ uv run ruff check .
 ```
 
 See [the contributor guide](docs/contributing.md) for development conventions.
+
+Runnable examples cover [model conversion and generation](examples/quantize_model.py),
+[a learned format](examples/learned_codebook.py) and
+[lattice and trellis quantization](examples/vector_quantization.py).

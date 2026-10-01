@@ -105,6 +105,11 @@ class Ctx:
             raise ValueError("additional bits must be nonnegative")
         self._additional_bits += bits
 
+    @property
+    def additional_bits(self) -> float:
+        """Side-information bits declared through add_bits during this quantizer call."""
+        return self._additional_bits
+
     def replace(self, **overrides: Any) -> "Ctx":
         copied = Ctx(
             self.name,
