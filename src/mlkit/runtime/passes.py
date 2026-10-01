@@ -8,10 +8,10 @@ import torch
 import torch.nn.functional as functional
 from torch import Tensor, nn
 
-from mlkit.context import layer_seed
-from mlkit.engine import BlockCall, CalibrationSession
-from mlkit.models import QModel, extract_hidden
-from mlkit.representation import Q
+from mlkit.quantization.context import layer_seed
+from mlkit.quantization.representation import Q
+from mlkit.runtime.engine import BlockCall, CalibrationSession
+from mlkit.runtime.models import QModel, extract_hidden
 
 
 class ConfiguredPass:

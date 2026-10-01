@@ -1,13 +1,28 @@
 """Extensible quantization and inference for PyTorch."""
 
-from mlkit.algorithms import awq, best_of, gptq, incoherent, ldlq, rtn
-from mlkit.context import Ctx
-from mlkit.data import DataSource, TokenBatches, data
-from mlkit.engine import quantize
-from mlkit.evaluation import PerplexityResult, Table, compare, eval, ppl, probe, sweep
-from mlkit.formats import int, mxfp4, nf4, scaled
-from mlkit.grids import grid
-from mlkit.inference import (
+from mlkit.experiments.data import DataSource, TokenBatches, data
+from mlkit.experiments.evaluation import PerplexityResult, Table, compare, eval, ppl, probe, sweep
+from mlkit.quantization.algorithms import awq, best_of, gptq, incoherent, ldlq, rtn
+from mlkit.quantization.context import Ctx
+from mlkit.quantization.formats import int, mxfp4, nf4, scaled
+from mlkit.quantization.grids import grid
+from mlkit.quantization.operations import (
+    absmax,
+    groups,
+    hadamard,
+    kmeans,
+    nearest,
+    proxy_loss,
+    rht,
+    snap,
+)
+from mlkit.quantization.packing import pack, unpack
+from mlkit.quantization.protocol import Quantizer, quantizer
+from mlkit.quantization.recipes import Recipe
+from mlkit.quantization.representation import Q
+from mlkit.quantization.trellis import Trellis, one_mad, trellis, viterbi
+from mlkit.runtime.engine import quantize
+from mlkit.runtime.inference import (
     BenchmarkResult,
     PackedLinear,
     benchmark,
@@ -15,16 +30,10 @@ from mlkit.inference import (
     export_torchao,
     optimize,
 )
-from mlkit.models import ArchitectureAdapter, Model, QModel, adapter, load
-from mlkit.operations import absmax, groups, hadamard, kmeans, nearest, proxy_loss, rht, snap
-from mlkit.packing import pack, unpack
-from mlkit.passes import BlockPassCtx, block_pass, finetune, model_pass, norm_params
-from mlkit.protocol import Quantizer, quantizer
-from mlkit.recipes import Recipe
-from mlkit.representation import Q
-from mlkit.serialization import codec, load_checkpoint, save
-from mlkit.transforms import fuse_norms, rotate, smooth
-from mlkit.trellis import Trellis, one_mad, trellis, viterbi
+from mlkit.runtime.models import ArchitectureAdapter, Model, QModel, adapter, load
+from mlkit.runtime.passes import BlockPassCtx, block_pass, finetune, model_pass, norm_params
+from mlkit.runtime.serialization import codec, load_checkpoint, save
+from mlkit.runtime.transforms import fuse_norms, rotate, smooth
 
 __version__ = "0.1.0"
 

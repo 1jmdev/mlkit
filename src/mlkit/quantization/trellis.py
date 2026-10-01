@@ -5,9 +5,9 @@ from collections.abc import Callable
 import torch
 from torch import Tensor
 
-from mlkit.context import Ctx
-from mlkit.protocol import Quantizer
-from mlkit.representation import Q
+from mlkit.quantization.context import Ctx
+from mlkit.quantization.protocol import Quantizer
+from mlkit.quantization.representation import Q
 
 
 def one_mad(states: Tensor) -> Tensor:
@@ -36,7 +36,7 @@ def viterbi(
         raise ValueError("Viterbi backend must be auto, torch, or triton")
     codes = codes.to(device=value.device, dtype=torch.float32)
     if value.device.type == "cuda" and backend != "torch" and L <= 12:
-        from mlkit.kernels.viterbi import search
+        from mlkit.runtime.kernels.viterbi import search
 
         states = search(value.float().contiguous(), codes, L, k)
     else:

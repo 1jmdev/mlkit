@@ -5,7 +5,7 @@ import math
 import torch
 from torch import Tensor
 
-from mlkit.context import Ctx
+from mlkit.quantization.context import Ctx
 
 
 def groups(weight: Tensor, group: int | None) -> Tensor:
@@ -126,7 +126,7 @@ def hadamard(value: Tensor, *, normalize: bool = True) -> Tensor:
 
 
 def rht(value: Tensor, *, seed: int = 0, inverse: bool = False) -> Tensor:
-    from mlkit.rotations import randomized_transform
+    from mlkit.quantization.rotations import randomized_transform
 
     return randomized_transform(value, seed=seed, inverse=inverse)
 

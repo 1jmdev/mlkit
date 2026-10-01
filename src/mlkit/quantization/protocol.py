@@ -7,8 +7,8 @@ from typing import Any
 
 from torch import Tensor
 
-from mlkit.context import Ctx
-from mlkit.representation import Q, as_q
+from mlkit.quantization.context import Ctx
+from mlkit.quantization.representation import Q, as_q
 
 
 class Quantizer:

@@ -13,11 +13,11 @@ import torch
 from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
 
-from mlkit.formats import decode_feedback, decode_scaled
-from mlkit.models import LayerReport, QModel
-from mlkit.packing import pack, unpack
-from mlkit.representation import Q
-from mlkit.trellis import decode_trellis
+from mlkit.quantization.formats import decode_feedback, decode_scaled
+from mlkit.quantization.packing import pack, unpack
+from mlkit.quantization.representation import Q
+from mlkit.quantization.trellis import decode_trellis
+from mlkit.runtime.models import LayerReport, QModel
 
 _CODECS: dict[str, Callable[..., Tensor]] = {
     "scaled": decode_scaled, "feedback": decode_feedback, "trellis": decode_trellis,
@@ -188,7 +188,7 @@ def load_checkpoint(
         converted.quantized[name] = quantized
         state[f"{name}.weight"] = quantized.w
     model.to(dtype=getattr(torch, manifest["dtype"]))
-    from mlkit.transforms import install_transform, record_transform
+    from mlkit.runtime.transforms import install_transform, record_transform
 
     for descriptor in manifest.get("transforms", []):
         install_transform(model, descriptor, state)

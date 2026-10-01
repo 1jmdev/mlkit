@@ -8,10 +8,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from mlkit.algorithms import awq, gptq
-from mlkit.context import Ctx
-from mlkit.formats import int, mxfp4, nf4
-from mlkit.protocol import Quantizer
+from mlkit.quantization.algorithms import awq, gptq
+from mlkit.quantization.context import Ctx
+from mlkit.quantization.formats import int, mxfp4, nf4
+from mlkit.quantization.protocol import Quantizer
 
 
 @dataclass

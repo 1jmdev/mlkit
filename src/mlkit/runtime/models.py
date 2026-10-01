@@ -8,7 +8,7 @@ from typing import Any, cast
 import torch
 from torch import Tensor, nn
 
-from mlkit.representation import Q
+from mlkit.quantization.representation import Q
 
 
 class ArchitectureAdapter:
@@ -205,7 +205,7 @@ class QModel(Model):
         return records
 
     def save(self, path: str | Path, **options: Any) -> None:
-        from mlkit.serialization import save
+        from mlkit.runtime.serialization import save
 
         save(self, path, **options)
 
@@ -217,7 +217,7 @@ def load(
 ) -> Model:
     path = Path(name)
     if (path / "mlkit.json").is_file():
-        from mlkit.serialization import load_checkpoint
+        from mlkit.runtime.serialization import load_checkpoint
 
         return load_checkpoint(path, **options)
     try:

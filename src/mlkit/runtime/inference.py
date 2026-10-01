@@ -11,10 +11,10 @@ import torch
 import torch.nn.functional as functional
 from torch import Tensor, nn
 
-from mlkit.engine import forward_batch, synchronize
-from mlkit.models import Model, QModel
-from mlkit.packing import pack
-from mlkit.representation import Q
+from mlkit.quantization.packing import pack
+from mlkit.quantization.representation import Q
+from mlkit.runtime.engine import forward_batch, synchronize
+from mlkit.runtime.models import Model, QModel
 
 
 class PackedLinear(nn.Module):
@@ -69,7 +69,7 @@ class PackedLinear(nn.Module):
     def weight(self) -> Tensor:
         if self._dense_weight is not None:
             return self._dense_weight
-        from mlkit.kernels.packed_linear import decode
+        from mlkit.runtime.kernels.packed_linear import decode
 
         reconstruction = torch.empty(
             (self.out_features, self.in_features), device=self.packed.device,
@@ -91,7 +91,7 @@ class PackedLinear(nn.Module):
         if len(flattened) <= self.maximum_fused_rows:
             if torch.is_grad_enabled() and inputs.requires_grad:
                 raise RuntimeError("packed CUDA inference does not support autograd")
-            from mlkit.kernels.packed_linear import matrix_vector
+            from mlkit.runtime.kernels.packed_linear import matrix_vector
 
             output = inputs.new_empty((len(flattened), self.out_features))
             matrix_vector(

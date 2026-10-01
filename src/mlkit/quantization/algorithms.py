@@ -7,12 +7,12 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from mlkit.context import Ctx, layer_seed
-from mlkit.formats import Scaled, decode_feedback
-from mlkit.operations import proxy_loss
-from mlkit.protocol import Quantizer, fit_quantizer
-from mlkit.representation import Q, as_q
-from mlkit.rotations import structured_transform
+from mlkit.quantization.context import Ctx, layer_seed
+from mlkit.quantization.formats import Scaled, decode_feedback
+from mlkit.quantization.operations import proxy_loss
+from mlkit.quantization.protocol import Quantizer, fit_quantizer
+from mlkit.quantization.representation import Q, as_q
+from mlkit.quantization.rotations import structured_transform
 
 QuantizerFunction = Callable[[Tensor, Ctx], Q | Tensor]
 
@@ -110,7 +110,7 @@ class ErrorFeedback(Quantizer):
                 raise ValueError("fused GPTQ requires CUDA, step=1, and a scaled integer grid")
             if use_fused:
                 assert isinstance(self.inner, Scaled)
-                from mlkit.kernels.error_feedback import round_tile
+                from mlkit.runtime.kernels.error_feedback import round_tile
 
                 initial = rounder(working[:, region_start:region_stop], slice(None))
                 assert initial.codes is not None
@@ -197,7 +197,7 @@ class ErrorFeedback(Quantizer):
                 metadata=codec_metadata,
             )
         if trellis_parts and len(trellis_parts) == width // self.step:
-            from mlkit.trellis import decode_trellis
+            from mlkit.quantization.trellis import decode_trellis
 
             parameters = trellis_parts[0].params | {
                 "shape": tuple(w.shape),

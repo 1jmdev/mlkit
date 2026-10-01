@@ -17,5 +17,12 @@ uv run pytest
 uv run ruff check .
 ```
 
-Source code lives in `src/mlkit`, tests in `tests`, and runnable examples in
-`examples`. The library targets Python 3.11 or newer and PyTorch 2.8 or newer.
+Source code is divided into three packages:
+
+- `src/mlkit/quantization`: quantizer protocols, formats, grids, algorithms and numerical operations.
+- `src/mlkit/runtime`: model adapters, conversion, calibration, passes, inference and checkpoints.
+- `src/mlkit/experiments`: dataset preparation, evaluation and experiment tables.
+
+CUDA kernels live in `src/mlkit/runtime/kernels`. Tests live in `tests`, and
+benchmarks live in `benchmarks`. The library targets Python 3.11 or newer and
+PyTorch 2.8 or newer. The public interface remains `import mlkit as mk`.

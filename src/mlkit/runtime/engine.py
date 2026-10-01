@@ -11,13 +11,13 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
-from mlkit.context import Ctx
-from mlkit.data import DataSource, TokenBatches, data, normalize_batches
-from mlkit.models import LayerReport, Model, QModel, architecture_adapter, extract_hidden
-from mlkit.operations import proxy_loss
-from mlkit.recipes import Recipe, normalize_recipe
-from mlkit.representation import as_q
-from mlkit.statistics import StatisticAccumulator, StatisticsCache, model_fingerprint
+from mlkit.experiments.data import DataSource, TokenBatches, data, normalize_batches
+from mlkit.quantization.context import Ctx
+from mlkit.quantization.operations import proxy_loss
+from mlkit.quantization.recipes import Recipe, normalize_recipe
+from mlkit.quantization.representation import as_q
+from mlkit.runtime.models import LayerReport, Model, QModel, architecture_adapter, extract_hidden
+from mlkit.runtime.statistics import StatisticAccumulator, StatisticsCache, model_fingerprint
 
 
 def map_tensors(value: Any, function: Callable[[Tensor], Tensor]) -> Any:
@@ -324,7 +324,7 @@ def quantize(
                         quantize_inputs
                     ))
         if definition.passes:
-            from mlkit.passes import run_block_passes
+            from mlkit.runtime.passes import run_block_passes
 
             run_block_passes(converted, index, block, original_block, session, definition.passes)
         session.propagate(index, block)

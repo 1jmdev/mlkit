@@ -8,10 +8,10 @@ import torch
 import torch.nn.functional as functional
 from torch import Tensor
 
-from mlkit.context import Ctx
-from mlkit.grids import NF4_VALUES, Grid, grid
-from mlkit.protocol import Quantizer
-from mlkit.representation import Q
+from mlkit.quantization.context import Ctx
+from mlkit.quantization.grids import NF4_VALUES, Grid, grid
+from mlkit.quantization.protocol import Quantizer
+from mlkit.quantization.representation import Q
 
 
 def decode_scaled(

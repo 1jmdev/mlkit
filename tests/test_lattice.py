@@ -1,8 +1,8 @@
 import torch
 
 import mlkit as mk
-from mlkit.lattice import absolute_points, e8p_points
-from mlkit.rotations import structured_transform
+from mlkit.quantization.lattice import absolute_points, e8p_points
+from mlkit.quantization.rotations import structured_transform
 
 
 def test_e8p_point_set_and_optimal_search() -> None:

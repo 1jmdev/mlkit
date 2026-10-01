@@ -15,14 +15,14 @@ import torch
 import torch.nn.functional as functional
 from torch import Tensor, nn
 
-from mlkit.context import Ctx
-from mlkit.data import DataSource, normalize_batches
-from mlkit.data import data as tokenize_data
-from mlkit.engine import BlockStatistics, CalibrationSession, quantize, synchronize
-from mlkit.models import Model
-from mlkit.operations import proxy_loss
-from mlkit.recipes import normalize_recipe
-from mlkit.representation import as_q
+from mlkit.experiments.data import DataSource, normalize_batches
+from mlkit.experiments.data import data as tokenize_data
+from mlkit.quantization.context import Ctx
+from mlkit.quantization.operations import proxy_loss
+from mlkit.quantization.recipes import normalize_recipe
+from mlkit.quantization.representation import as_q
+from mlkit.runtime.engine import BlockStatistics, CalibrationSession, quantize, synchronize
+from mlkit.runtime.models import Model
 
 
 @dataclass
