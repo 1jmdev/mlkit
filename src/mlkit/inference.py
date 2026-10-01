@@ -12,13 +12,20 @@ import torch.nn.functional as functional
 from torch import Tensor, nn
 
 from mlkit.engine import forward_batch, synchronize
-from mlkit.models import Model, QModel
-from mlkit.packing import pack, unpack
+from mlkit.models import Model, QModel, resolve_device
+from mlkit.packing import pack
 from mlkit.representation import Q
 
 
 class PackedLinear(nn.Module):
     """Exact scalar-grid codes, fused CUDA decode, and dense prefill fallback."""
+
+    packed: Tensor
+    scales: Tensor
+    values: Tensor
+    zeros: Tensor | None
+    bias: Tensor | None
+    _dense_weight: Tensor | None
 
     def __init__(self, original: nn.Linear, quantized: Q, *, cache_dense: bool = False) -> None:
         super().__init__()
@@ -33,6 +40,8 @@ class PackedLinear(nn.Module):
             raise ValueError("PackedLinear requires refit boundaries aligned with scale groups")
         assert quantized.codes is not None
         device = original.weight.device
+        if device.type != "cuda":
+            raise ValueError("PackedLinear requires CUDA weights")
         self.in_features = original.in_features
         self.out_features = original.out_features
         self.group = quantized.params["group"]
@@ -60,32 +69,26 @@ class PackedLinear(nn.Module):
     def weight(self) -> Tensor:
         if self._dense_weight is not None:
             return self._dense_weight
-        if self.packed.device.type == "cuda":
-            from mlkit.kernels.packed_linear import decode
+        from mlkit.kernels.packed_linear import decode
 
-            reconstruction = torch.empty(
-                (self.out_features, self.in_features), device=self.packed.device,
-                dtype=self.storage_dtype,
-            )
-            decode(self.packed, self.scales, self.values, self.zeros, reconstruction,
-                   self.group, self.uniform_grid, self.grid_minimum, self.grid_step)
-        else:
-            codes = unpack(self.packed, 4, (self.out_features, self.in_features)).long()
-            positions = torch.arange(self.in_features, device=self.packed.device) // self.group
-            reconstruction = self.values[codes] * self.scales[:, positions]
-            if self.zeros is not None:
-                reconstruction += self.zeros[:, positions]
-            reconstruction = reconstruction.to(self.storage_dtype)
+        reconstruction = torch.empty(
+            (self.out_features, self.in_features), device=self.packed.device,
+            dtype=self.storage_dtype,
+        )
+        decode(self.packed, self.scales, self.values, self.zeros, reconstruction,
+               self.group, self.uniform_grid, self.grid_minimum, self.grid_step)
         if self.cache_dense:
             self._dense_weight = reconstruction
         return reconstruction
 
     def forward(self, inputs: Tensor) -> Tensor:
         shape = inputs.shape
+        if inputs.device.type != "cuda":
+            raise ValueError("packed inference requires CUDA inputs")
         flattened = inputs.reshape(-1, shape[-1]).contiguous()
         if flattened.shape[1] != self.in_features:
             raise ValueError("input width does not match the packed linear")
-        if inputs.device.type == "cuda" and len(flattened) <= self.maximum_fused_rows:
+        if len(flattened) <= self.maximum_fused_rows:
             if torch.is_grad_enabled() and inputs.requires_grad:
                 raise RuntimeError("packed CUDA inference does not support autograd")
             from mlkit.kernels.packed_linear import matrix_vector
@@ -117,18 +120,20 @@ def optimize(
     if backend not in {"auto", "dense", "packed"}:
         raise ValueError("backend must be auto, dense, or packed")
     wrapped = model if isinstance(model, Model) else Model(model)
+    resolve_device(wrapped.device)
     converted = wrapped if inplace else copy.deepcopy(wrapped)
+    if isinstance(converted, QModel):
+        _ = converted.model_bpw
     if backend == "auto":
-        use_packed = isinstance(converted, QModel) and converted.device.type == "cuda"
+        use_packed = isinstance(converted, QModel)
         backend = "packed" if use_packed else "dense"
     if backend == "packed":
         if not isinstance(converted, QModel):
             raise ValueError("packed inference requires a QModel with codec state")
-        if converted.device.type == "cuda":
-            try:
-                import triton  # noqa: F401
-            except ImportError as error:
-                raise ImportError("packed CUDA inference requires Triton") from error
+        try:
+            import triton  # noqa: F401
+        except ImportError as error:
+            raise ImportError("packed CUDA inference requires Triton") from error
         replaced = 0
         for name, quantized in converted.quantized.items():
             module = converted.module.get_submodule(name)
@@ -199,12 +204,12 @@ class BenchmarkResult:
 def benchmark(
     operation: Callable[[], Any],
     *,
-    device: str | torch.device = "cpu",
+    device: str | torch.device = "cuda",
     warmup: int = 10,
     repetitions: int = 50,
 ) -> BenchmarkResult:
     """Synchronize outside each timed interval; exclude warmup and compilation."""
-    selected_device = torch.device(device)
+    selected_device = resolve_device(device)
     if warmup < 0 or repetitions < 1:
         raise ValueError("warmup must be nonnegative and repetitions must be positive")
     samples = []
@@ -212,8 +217,7 @@ def benchmark(
         for _ in range(warmup):
             operation()
         synchronize(selected_device)
-        if selected_device.type == "cuda":
-            torch.cuda.reset_peak_memory_stats(selected_device)
+        torch.cuda.reset_peak_memory_stats(selected_device)
         for _ in range(repetitions):
             synchronize(selected_device)
             start = time.perf_counter()
@@ -221,9 +225,7 @@ def benchmark(
             synchronize(selected_device)
             samples.append((time.perf_counter() - start) * 1000)
     ordered = sorted(samples)
-    memory = (
-        torch.cuda.max_memory_allocated(selected_device) if selected_device.type == "cuda" else None
-    )
+    memory = torch.cuda.max_memory_allocated(selected_device)
     return BenchmarkResult(
         statistics.median(samples), min(samples),
         ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))],

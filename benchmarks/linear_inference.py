@@ -16,10 +16,10 @@ def main() -> None:
         "--output", type=Path, default=Path("benchmark_results/linear_inference.json")
     )
     parser.add_argument("--repetitions", type=int, default=100)
-    parser.add_argument("--device", choices=["cpu", "cuda"], default="cuda")
+    parser.add_argument("--device", default="cuda", help="CUDA device identifier")
     arguments = parser.parse_args()
     device = torch.device(arguments.device)
-    dtype = torch.float16 if device.type == "cuda" else torch.float32
+    dtype = torch.float16
     torch.manual_seed(41)
     records = []
     shapes = [(2048, 2048), (8192, 2048), (2048, 8192), (4096, 4096)]
@@ -46,8 +46,7 @@ def main() -> None:
         del module, converted, packed
     document = {
         "torch": torch.__version__, "device": str(device), "dtype": str(dtype),
-        "threads": torch.get_num_threads(),
-        "gpu": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+        "gpu": torch.cuda.get_device_name(device),
         "measurements": records,
     }
     arguments.output.parent.mkdir(parents=True, exist_ok=True)

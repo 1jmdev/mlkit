@@ -3,7 +3,7 @@
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import Tensor, nn
@@ -33,7 +33,10 @@ class ArchitectureAdapter:
     def blocks(self) -> Sequence[nn.Module]:
         if self.block_path is None:
             return (self.model,)
-        return self.model.get_submodule(self.block_path)
+        sequence = self.model.get_submodule(self.block_path)
+        if not isinstance(sequence, (nn.ModuleList, nn.Sequential)):
+            raise TypeError("architecture block path must identify a ModuleList or Sequential")
+        return list(sequence)
 
     def block_name(self, index: int) -> str:
         return "" if self.block_path is None else f"{self.block_path}.{index}"
@@ -110,20 +113,29 @@ class Model(nn.Module):
         self.tokenizer = tokenizer
         self.name = name or type(module).__name__
         self.architecture = architecture or architecture_adapter(module)
+        self.execution_backend = "dense"
+        self._parameter_accounting: tuple[int, int] | None = None
+        first_parameter = next(module.parameters(), None)
+        self._initial_dtype = torch.float32 if first_parameter is None else first_parameter.dtype
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
         return self.module(*args, **kwargs)
 
     def generate(self, *args: Any, **kwargs: Any) -> Any:
-        return self.module.generate(*args, **kwargs)
+        generate = cast(Callable[..., Any], self.module.generate)
+        return generate(*args, **kwargs)
 
     @property
     def device(self) -> torch.device:
-        return next(self.module.parameters()).device
+        tensor: Tensor | None = next(self.module.parameters(), None)
+        if tensor is None:
+            tensor = next(self.module.buffers(), None)
+        return torch.device("cpu") if tensor is None else tensor.device
 
     @property
     def dtype(self) -> torch.dtype:
-        return next(self.module.parameters()).dtype
+        tensor = next(self.module.parameters(), None)
+        return self._initial_dtype if tensor is None else tensor.dtype
 
     @property
     def config(self) -> Any:
@@ -168,13 +180,16 @@ class QModel(Model):
         """Include untouched embeddings, output heads, norms, and biases."""
         if self.bpw is None:
             return None
-        selected = {f"{record.name}.weight" for record in self.layer_reports}
-        original_bits = 0
-        original_elements = 0
-        for name, parameter in self.module.named_parameters():
-            original_elements += parameter.numel()
-            if name not in selected:
-                original_bits += parameter.numel() * parameter.element_size() * 8
+        if self._parameter_accounting is None:
+            selected = {f"{record.name}.weight" for record in self.layer_reports}
+            original_bits = 0
+            original_elements = 0
+            for name, parameter in self.module.named_parameters():
+                original_elements += parameter.numel()
+                if name not in selected:
+                    original_bits += parameter.numel() * parameter.element_size() * 8
+            self._parameter_accounting = original_elements, original_bits
+        original_elements, original_bits = self._parameter_accounting
         quantized_bits = sum(
             record.bits for record in self.layer_reports if record.bits is not None
         )
@@ -197,8 +212,13 @@ class QModel(Model):
 
 def resolve_device(device: str | torch.device) -> torch.device:
     if device == "auto":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return torch.device(device)
+        device = "cuda"
+    selected = torch.device(device)
+    if selected.type != "cuda":
+        raise ValueError("mlkit model execution requires a CUDA device")
+    if not torch.cuda.is_available():
+        raise RuntimeError("mlkit requires a CUDA-enabled PyTorch installation and NVIDIA GPU")
+    return selected
 
 
 def load(
@@ -217,7 +237,9 @@ def load(
     except ImportError as error:
         raise ImportError("Hugging Face loading requires uv add 'mlkit[transformers]'") from error
     selected_dtype = getattr(torch, dtype) if isinstance(dtype, str) and dtype != "auto" else dtype
-    module = AutoModelForCausalLM.from_pretrained(str(name), dtype=selected_dtype, **options)
+    module: nn.Module = AutoModelForCausalLM.from_pretrained(
+        str(name), dtype=selected_dtype, **options
+    )
     module.to(resolve_device(device)).eval()
     tokenizer = AutoTokenizer.from_pretrained(str(name), trust_remote_code=False)
     return Model(module, tokenizer, name=str(name))
