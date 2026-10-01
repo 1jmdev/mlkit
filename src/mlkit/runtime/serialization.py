@@ -153,6 +153,7 @@ def load_checkpoint(
     elif not isinstance(model, nn.Module):
         model = model()
     assert isinstance(model, nn.Module)
+    model.to(dtype=getattr(torch, manifest["dtype"]))
     tensors = load_file(str(directory / "weights.safetensors"))
     state = {name.removeprefix("state."): value for name, value in tensors.items()
              if name.startswith("state.")}
@@ -174,8 +175,7 @@ def load_checkpoint(
         else:
             quantized = Q(tensors[f"{name}.reconstruction"], bits=layer["bits"])
         converted.quantized[name] = quantized
-        state[f"{name}.weight"] = quantized.w
-    model.to(dtype=getattr(torch, manifest["dtype"]))
+        state[f"{name}.weight"] = quantized.to("cuda").w.detach().cpu()
     from mlkit.runtime.transforms import install_transform, record_transform
 
     for descriptor in manifest.get("transforms", []):
@@ -198,4 +198,6 @@ def decode_parameter(tensors: dict[str, Tensor], descriptor: dict) -> Tensor:
         return torch.pow(2.0, value.float() - 127)
     if descriptor.get("encoding") == "packed":
         return unpack(value, descriptor["bits"], tuple(descriptor["shape"]))
-    return value.float() if value.dtype == torch.float8_e4m3fn else value
+    return value.float() if value.dtype in {
+        torch.float16, torch.bfloat16, torch.float8_e4m3fn,
+    } else value

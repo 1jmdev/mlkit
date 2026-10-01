@@ -76,12 +76,21 @@ def decode_trellis(
     tile: int,
     codebook: Tensor | None = None,
 ) -> Tensor:
-    state = initial_states.to(device=transitions.device, dtype=torch.long)
-    sequence = [state]
-    for time in range(transitions.shape[1]):
-        state = ((state << k) | transitions[:, time].long()) & (2**L - 1)
-        sequence.append(state)
-    states = torch.stack(sequence, dim=1)
+    needs_gradients = torch.is_grad_enabled() and (
+        scale.requires_grad or (codebook is not None and codebook.requires_grad)
+    )
+    if transitions.is_cuda and not needs_gradients:
+        from mlkit.runtime.kernels.trellis_decode import decode
+
+        return decode(transitions, initial_states, scale, shape, tile, L, k, codebook)
+    time = torch.arange(transitions.shape[1] + 1, device=transitions.device)
+    shifts = (time * k).clamp_max(L)
+    states = torch.where(time * k < L, initial_states.long()[:, None] << shifts, 0)
+    for offset in range((L + k - 1) // k if transitions.shape[1] else 0):
+        positions = (time - 1 - offset).clamp_min(0)
+        incoming = transitions[:, positions.clamp_max(transitions.shape[1] - 1)].long()
+        states |= torch.where(time > offset, incoming << (offset * k), 0)
+    states &= 2**L - 1
     reconstruction = one_mad(states) if codebook is None else codebook.to(states.device)[states]
     height, width = shape
     decoded = reconstruction * scale.to(states.device)

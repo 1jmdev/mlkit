@@ -61,3 +61,15 @@ def test_trellis_checkpoint(tmp_path) -> None:
     ))
     torch.testing.assert_close(converted.module[0].weight, restored.module[0].weight,
                                rtol=0, atol=0)
+
+
+@pytest.mark.cuda
+@pytest.mark.usefixtures("cuda_tensors")
+def test_parallel_trellis_decoder_matches_differentiable_reconstruction() -> None:
+    result = mk.trellis(L=8, tile=4)(torch.randn(8, 16))
+    result.params["scale"].requires_grad_(True)
+    differentiable = result.w
+    differentiable.square().mean().backward()
+    assert result.params["scale"].grad is not None
+    result.params["scale"].requires_grad_(False)
+    torch.testing.assert_close(result.w, differentiable.detach(), rtol=1e-6, atol=1e-6)
