@@ -13,27 +13,13 @@ import torch
 from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
 
-from mlkit.quantization.formats import decode_feedback, decode_scaled
+from mlkit.quantization.codecs import codec as codec
+from mlkit.quantization.codecs import decoder, registered
 from mlkit.quantization.packing import pack, unpack
 from mlkit.quantization.representation import Q
-from mlkit.quantization.trellis import decode_trellis
 from mlkit.runtime.models import LayerReport, QModel
 
-_CODECS: dict[str, Callable[..., Tensor]] = {
-    "scaled": decode_scaled, "feedback": decode_feedback, "trellis": decode_trellis,
-}
 FORMAT_VERSION = 1
-
-
-def codec(name: str) -> Callable[[Callable], Callable]:
-    """Register an explicit decoder; checkpoints contain its name, never code."""
-    def register(decoder: Callable[..., Tensor]) -> Callable:
-        if not name or name in _CODECS:
-            raise ValueError(f"codec name {name!r} is empty or already registered")
-        _CODECS[name] = decoder
-        return decoder
-
-    return register
 
 
 def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
@@ -50,7 +36,7 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
         tensors: dict[str, Tensor] = {}
         layers = {}
         for name, quantized in model.quantized.items():
-            if quantized.codec in _CODECS and quantized.codes is not None:
+            if registered(quantized.codec) and quantized.codes is not None:
                 precision = quantized.metadata.get("code_bits")
                 if precision is None:
                     precision = max(1, int(quantized.codes.max()).bit_length())
@@ -173,8 +159,6 @@ def load_checkpoint(
     converted = QModel(model, tokenizer, name=manifest["name"])
     for name, layer in manifest["layers"].items():
         if layer["codec"] is not None:
-            if layer["codec"] not in _CODECS:
-                raise ValueError(f"checkpoint requires registered codec {layer['codec']!r}")
             codes = unpack(tensors[f"{name}.codes"], layer["code_bits"], tuple(layer["shape"]))
             parameters = {
                 parameter_name: (
@@ -183,7 +167,7 @@ def load_checkpoint(
                 for parameter_name, value in layer["params"].items()
             }
             quantized = Q(
-                codes=codes, params=parameters, decode=_CODECS[layer["codec"]],
+                codes=codes, params=parameters, decode=decoder(layer["codec"]),
                 codec=layer["codec"], bits=layer["bits"],
                 metadata=layer.get("metadata", {}) | {"code_bits": layer["code_bits"]},
             )

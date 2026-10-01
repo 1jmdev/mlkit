@@ -7,6 +7,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
+from mlkit.quantization.codecs import compose, deterministic_signs, registered
 from mlkit.quantization.context import Ctx, layer_seed
 from mlkit.quantization.formats import Scaled, decode_feedback
 from mlkit.quantization.operations import proxy_loss
@@ -268,21 +269,18 @@ class Incoherent(Quantizer):
     ) -> None:
         if left not in {None, "rht"} or right not in {None, "rht"}:
             raise ValueError("incoherence transforms must be rht or None")
-        if train_signs:
-            raise NotImplementedError("trainable incoherence signs require a differentiable codec")
         self.inner = inner
         self.left = left
         self.right = right
+        self.train_signs = train_signs
 
     def __call__(self, w: Tensor, ctx: Ctx | None = None) -> Q:
         ctx = ctx or Ctx(device=w.device)
-        generator = torch.Generator(device=w.device).manual_seed(layer_seed(ctx.name, ctx._seed))
-
-        def signs(width: int) -> Tensor:
-            return torch.randint(2, (width,), device=w.device, generator=generator).float() * 2 - 1
-
-        left_signs = signs(w.shape[0]) if self.left else None
-        right_signs = signs(w.shape[1]) if self.right else None
+        seed = layer_seed(ctx.name, ctx._seed) % 2**32
+        left_seed = seed if self.left else None
+        right_seed = (seed + 1) % 2**32 if self.right else None
+        left_signs = deterministic_signs(w.shape[0], seed, w.device) if self.left else None
+        right_signs = deterministic_signs(w.shape[1], seed + 1, w.device) if self.right else None
         transformed = w.float()
         if left_signs is not None:
             transformed = structured_transform((transformed * left_signs[:, None]).T).T
@@ -312,6 +310,22 @@ class Incoherent(Quantizer):
             transformed_context._stats = {}
             transformed_context._provider = provider
         quantized = as_q(self.inner(transformed, transformed_context))
+        ctx.add_bits(transformed_context._additional_bits)
+        if quantized.codes is not None and registered(quantized.codec):
+            result = compose(quantized, "basis", {
+                "shape": tuple(w.shape), "left_seed": left_seed, "right_seed": right_seed,
+                "left_signs": left_signs if self.train_signs else None,
+                "right_signs": right_signs if self.train_signs else None,
+            })
+            if self.train_signs:
+                for name, signs in [("left_signs", left_signs), ("right_signs", right_signs)]:
+                    if signs is not None:
+                        result.metadata["trainable"].append(name)
+                        result.metadata["parameter_formats"][name] = "fp16"
+                        ctx.add_bits(16 * signs.numel())
+            return result
+        if self.train_signs:
+            raise ValueError("trainable signs require an inner quantizer with a registered codec")
         reconstruction = quantized.w
         if right_signs is not None:
             reconstruction = structured_transform(reconstruction, inverse=True) * right_signs
@@ -319,7 +333,6 @@ class Incoherent(Quantizer):
             reconstruction = (
                 structured_transform(reconstruction.T, inverse=True).T * left_signs[:, None]
             )
-        ctx.add_bits(transformed_context._additional_bits)
         return Q(reconstruction, bits=quantized.bits)
 
     def __repr__(self) -> str:
