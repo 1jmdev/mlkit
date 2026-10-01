@@ -1,0 +1,74 @@
+{
+  "model": "meta-llama/Llama-3.2-1B",
+  "torch": "2.14.1+cu130",
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "compiled": true,
+  "cuda": "13.0",
+  "warmup_generations": 2,
+  "measurements": [
+    {
+      "backend": "dense",
+      "method": "baseline",
+      "prompt_tokens": 14,
+      "generated_tokens": 64,
+      "tokens_per_second": 83.15435149570641,
+      "model_storage_bytes": 2471629056,
+      "median_ms": 769.6530470002472,
+      "minimum_ms": 769.075989999692,
+      "percentile_95_ms": 771.1040720005258,
+      "repetitions": 5,
+      "device": "cuda:0",
+      "peak_memory_bytes": 2487705088
+    },
+    {
+      "backend": "dense+compiled",
+      "method": "baseline-compiled",
+      "prompt_tokens": 14,
+      "generated_tokens": 64,
+      "tokens_per_second": 88.7812258691102,
+      "model_storage_bytes": 2471629056,
+      "median_ms": 720.8731280006759,
+      "minimum_ms": 715.9100219996617,
+      "percentile_95_ms": 771.4153019987862,
+      "repetitions": 5,
+      "device": "cuda:0",
+      "peak_memory_bytes": 2489988608
+    },
+    {
+      "backend": "dense+compiled",
+      "method": "dense",
+      "prompt_tokens": 14,
+      "generated_tokens": 64,
+      "tokens_per_second": 89.35551106197875,
+      "model_storage_bytes": 2471629056,
+      "median_ms": 716.2400980014354,
+      "minimum_ms": 714.6549549997872,
+      "percentile_95_ms": 718.0813630002376,
+      "repetitions": 5,
+      "device": "cuda:0",
+      "peak_memory_bytes": 2489988608
+    },
+    {
+      "backend": "packed:112+compiled",
+      "method": "packed",
+      "prompt_tokens": 14,
+      "generated_tokens": 64,
+      "tokens_per_second": 121.83881832686187,
+      "model_storage_bytes": 1027222784,
+      "median_ms": 525.2841490000719,
+      "minimum_ms": 520.8326150004723,
+      "percentile_95_ms": 531.6163880015665,
+      "repetitions": 5,
+      "device": "cuda:0",
+      "peak_memory_bytes": 1076155392
+    }
+  ],
+  "dtype": "float16",
+  "measurement_date": "2026-10-01",
+  "quantization": {
+    "method": "rtn",
+    "bits": 4,
+    "group": 128,
+    "seed": 0
+  }
+}

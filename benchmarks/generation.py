@@ -26,6 +26,8 @@ def main() -> None:
         "gpu": torch.cuda.get_device_name(),
         "compiled": arguments.compile,
         "cuda": torch.version.cuda,
+        "dtype": "float16",
+        "quantization": {"method": "rtn", "bits": 4, "group": 128, "seed": 0},
         "warmup_generations": 2,
         "measurements": records,
     }

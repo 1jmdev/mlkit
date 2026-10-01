@@ -1,0 +1,44 @@
+{
+  "model": "meta-llama/Llama-3.2-1B",
+  "torch": "2.14.1+cu130",
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "sequence": 256,
+  "cuda": "13.0",
+  "seed": 17,
+  "calibration_batches": 8,
+  "evaluation_batches": 16,
+  "measurements": [
+    {
+      "method": "baseline",
+      "perplexity": 18.34516901817704,
+      "tokens": 4080,
+      "seconds": 0.9990660849998676
+    },
+    {
+      "method": "rtn-int4-g128",
+      "bpw": 4.125,
+      "perplexity": 23.597089201717466,
+      "tokens": 4080,
+      "quantization_seconds": 1.10779526099941,
+      "evaluation_seconds": 0.5032523499994568
+    },
+    {
+      "method": "nf4-g64",
+      "bpw": 4.25,
+      "perplexity": 20.494587453912924,
+      "tokens": 4080,
+      "quantization_seconds": 1.678341355000157,
+      "evaluation_seconds": 0.5088094080001611
+    },
+    {
+      "method": "gptq-int4-g128",
+      "bpw": 4.125,
+      "perplexity": 23.055852266885744,
+      "tokens": 4080,
+      "quantization_seconds": 13.89514655899984,
+      "evaluation_seconds": 0.5135967460009851
+    }
+  ],
+  "dtype": "float16",
+  "measurement_date": "2026-10-01"
+}

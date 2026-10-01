@@ -50,6 +50,7 @@ def main() -> None:
         gc.collect()
     document = {"model": arguments.model, "torch": torch.__version__,
                 "gpu": torch.cuda.get_device_name(), "sequence": arguments.sequence,
+                "cuda": torch.version.cuda, "dtype": "float16", "seed": 17,
                 "calibration_batches": arguments.calibration_batches,
                 "evaluation_batches": arguments.evaluation_batches, "measurements": records}
     arguments.output.parent.mkdir(parents=True, exist_ok=True)

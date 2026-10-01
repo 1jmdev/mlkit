@@ -1,0 +1,34 @@
+{
+  "model": "meta-llama/Llama-3.2-1B",
+  "torch": "2.14.1+cu130",
+  "cuda": "13.0",
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "measurements": [
+    {
+      "backend": "dense",
+      "tokens": 32,
+      "maximum_absolute_logit_error": 0.03125,
+      "root_mean_square_logit_error": 0.004216063767671585,
+      "next_token_agreement": 0.96875,
+      "cached_cross_entropy": 0.48122096061706543,
+      "eager_cross_entropy": 0.4808545708656311
+    },
+    {
+      "backend": "packed",
+      "tokens": 32,
+      "maximum_absolute_logit_error": 0.0390625,
+      "root_mean_square_logit_error": 0.0046997033059597015,
+      "next_token_agreement": 1.0,
+      "cached_cross_entropy": 0.7020251154899597,
+      "eager_cross_entropy": 0.7019863724708557
+    }
+  ],
+  "dtype": "float16",
+  "measurement_date": "2026-10-01",
+  "quantization": {
+    "method": "rtn",
+    "bits": 4,
+    "group": 128,
+    "seed": 0
+  }
+}
