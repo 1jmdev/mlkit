@@ -109,7 +109,10 @@ class CalibrationSession:
         retain_history: bool = True,
         selected_blocks: tuple[int, ...] | None = None,
         storage: str = "auto",
+        token_energy_limit: float | None = 100.0,
     ) -> None:
+        if token_energy_limit is not None and token_energy_limit <= 0:
+            raise ValueError("the token energy limit must be positive or None")
         if selected_blocks is not None:
             if sequential:
                 raise ValueError("selected block capture requires nonsequential calibration")
@@ -124,6 +127,7 @@ class CalibrationSession:
         self.retain_history = retain_history
         self.selected_blocks = selected_blocks
         self.storage = ActivationStorage(storage)
+        self.token_energy_limit = token_energy_limit
         self.calls: list[list[BlockCall]] | None = None
         self.targets: list[list[Tensor]] = [[] for _ in model.blocks]
         self.requirements: dict[str, tuple[Callable | None, str]] = {}
@@ -147,9 +151,12 @@ class CalibrationSession:
             token_batches = TokenBatches(
                 batch if isinstance(batch, dict) else {"inputs": batch} for batch in self.batches
             )
-            identity = hashlib.sha256(
-                (model_fingerprint(self.model.module) + token_batches.fingerprint).encode()
-            ).hexdigest()
+            description = (
+                model_fingerprint(self.model.module)
+                + token_batches.fingerprint
+                + f"token_energy_limit={self.token_energy_limit}"
+            )
+            identity = hashlib.sha256(description.encode()).hexdigest()
             self.disk_cache = StatisticsCache(self.cache_dir, identity)
 
     def prepare(self) -> None:

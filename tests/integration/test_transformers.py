@@ -68,7 +68,7 @@ def test_sequential_llama_replay_preserves_calibration_statistics() -> None:
         observed[context.name] = context.H.cpu()
         return mk.Q(weight.clone(), bits=16 * weight.numel())
 
-    mk.quantize(model, identity, calib=batches, cache_dir=None)
+    mk.quantize(model, identity, calib=batches, cache_dir=None, token_energy_limit=None)
     assert observed.keys() == collectors.keys()
     for name, value in observed.items():
         torch.testing.assert_close(value, collectors[name].result().cpu(), rtol=1e-5, atol=1e-6)

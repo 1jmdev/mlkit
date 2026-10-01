@@ -9,6 +9,23 @@ from mlkit.calibration.session import CalibrationSession
 from mlkit.models.architecture import identify_siblings
 
 
+def limit_token_energy(inputs: Tensor, limit: float | None) -> Tensor:
+    """Scale down rows whose energy exceeds ``limit`` times the median row energy.
+
+    A few tokens of a transformer carry activations orders of magnitude larger
+    than all others. Left unlimited, they dominate every second-moment statistic,
+    and error feedback then trades the accuracy of ordinary tokens for theirs.
+    Rows within the limit are returned unchanged; ``None`` disables the limit.
+    """
+    if limit is None or inputs.shape[0] < 2:
+        return inputs
+    energy = inputs.square().sum(1)
+    threshold = limit * energy.median()
+    if threshold <= 0 or not bool((energy > threshold).any()):
+        return inputs
+    return inputs * (threshold / energy).clamp_max(1).sqrt()[:, None]
+
+
 class StatisticAccumulator:
     """A streaming reduction over layer inputs whose state stays on the input device."""
 
@@ -144,6 +161,7 @@ class BlockStatistics:
                 collectors: list[StatisticAccumulator] = collectors,
             ) -> None:
                 inputs = arguments[0].detach().reshape(-1, arguments[0].shape[-1]).float()
+                inputs = limit_token_energy(inputs, session.token_energy_limit)
                 for collector in collectors:
                     collector.update(inputs)
 

@@ -41,12 +41,15 @@ def quantize(
     sample_rows: int = 4096,
     cache_dir: str | Path | None = "~/.cache/mlkit/statistics",
     calibration_storage: str = "auto",
+    token_energy_limit: float | None = 100.0,
 ) -> QModel:
     """Convert a separate model copy; statistics and datasets remain lazy.
 
     ``calibration_storage`` places captured block inputs: ``"auto"`` keeps them on
     CUDA while a memory reserve remains, ``"cuda"`` always does, and ``"host"``
-    moves them to host memory.
+    moves them to host memory. ``token_energy_limit`` bounds the energy of one
+    calibration token relative to the median token of its batch, so that a few
+    massive activations cannot dominate the statistics; ``None`` disables it.
     """
     source = model if isinstance(model, Model) else Model(model)
     definition: Recipe = normalize_recipe(recipe)
@@ -63,6 +66,7 @@ def quantize(
         need_targets=bool(definition.passes),
         retain_history=bool(definition.model_passes),
         storage=calibration_storage,
+        token_energy_limit=token_energy_limit,
     )
     if definition.passes or (definition.transforms and not sequential):
         session.prepare()

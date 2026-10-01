@@ -28,6 +28,7 @@ def probe(
     cache_dir: str | Path | None = "~/.cache/mlkit/statistics",
     seed: int = 0,
     print_table: bool = True,
+    token_energy_limit: float | None = 100.0,
 ) -> Table:
     wrapped = model if isinstance(model, Model) else Model(model)
     selected_blocks = tuple(
@@ -43,6 +44,7 @@ def probe(
         wrapped, calib, sequential=False, sample_rows=4096,
         cache_dir=None if cache_dir is None else Path(cache_dir).expanduser(), need_targets=False,
         selected_blocks=selected_blocks,
+        token_energy_limit=token_energy_limit,
     )
     records = []
     for index, block in enumerate(wrapped.blocks):
