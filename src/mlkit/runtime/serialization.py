@@ -219,6 +219,15 @@ def load_checkpoint(
     for descriptor in manifest.get("transforms", []):
         install_transform(model, descriptor, state)
         record_transform(model, descriptor)
+    for name, value in state.items():
+        owner, _, field = name.rpartition(".")
+        if field != "bias":
+            continue
+        module = model.get_submodule(owner)
+        if isinstance(module, nn.Linear) and module.bias is None:
+            if tuple(value.shape) != (module.out_features,):
+                raise ValueError(f"checkpoint bias shape does not match linear layer {owner!r}")
+            module.bias = nn.Parameter(value.to(module.weight.device, module.weight.dtype))
     model.load_state_dict(state, strict=True)
     model.cuda().eval()
     for name, specification in manifest.get("activations", {}).items():
