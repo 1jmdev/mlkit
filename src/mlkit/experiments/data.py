@@ -88,7 +88,7 @@ def data(
         except ImportError as error:
             raise ImportError("named datasets require uv add 'mlkit[datasets]'") from error
         if name == "wikitext2":
-            corpus = load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+            corpus = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split=split)
         elif name == "c4":
             selected_split = "validation" if split == "test" else split
             corpus = load_dataset("allenai/c4", "en", split=selected_split, streaming=streaming)
