@@ -12,11 +12,11 @@ def search_sequence(
     codes,
     traceback,
     output,
-    length: tl.constexpr,
+    length,
     state_bits: tl.constexpr,
     transition_bits: tl.constexpr,
 ):
-    sample = tl.program_id(0)
+    sample = tl.program_id(0).to(tl.int64)
     state_count: tl.constexpr = 1 << state_bits
     predecessor_count: tl.constexpr = 1 << (state_bits - transition_bits)
     states = tl.arange(0, state_count)
@@ -53,7 +53,14 @@ def search(inputs: Tensor, codes: Tensor, L: int, k: int) -> Tensor:
     )
     output = torch.empty_like(inputs, dtype=torch.int32)
     search_sequence[(len(inputs),)](
-        inputs, codes, traceback, output, inputs.shape[1], L, k,
-        num_warps=4, enable_fp_fusion=False,
+        inputs,
+        codes,
+        traceback,
+        output,
+        inputs.shape[1],
+        L,
+        k,
+        num_warps=4,
+        enable_fp_fusion=False,
     )
     return output

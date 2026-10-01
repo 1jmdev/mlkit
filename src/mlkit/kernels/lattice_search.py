@@ -7,8 +7,8 @@ from torch import Tensor
 
 
 @triton.jit
-def nearest_lattice(inputs, magnitudes, output, count: tl.constexpr):
-    sample = tl.program_id(0)
+def nearest_lattice(inputs, magnitudes, output):
+    sample = tl.program_id(0).to(tl.int64)
     coordinates = tl.arange(0, 8)
     candidates = tl.arange(0, 256)
     values = tl.load(inputs + sample * 8 + coordinates).to(tl.float32)
@@ -37,14 +37,17 @@ def nearest_lattice(inputs, magnitudes, output, count: tl.constexpr):
         code = index * 128 + sign_code + (32768 if shift_index == 0 else 0)
         selected = tl.where(cost < minimum_cost, code, selected)
         minimum_cost = tl.minimum(cost, minimum_cost)
-    tl.store(output + sample, selected, sample < count)
+    tl.store(output + sample, selected)
 
 
 def search(inputs: Tensor, magnitudes: Tensor) -> Tensor:
     flattened = inputs.reshape(-1, 8).contiguous()
     indices = torch.empty(len(flattened), device=inputs.device, dtype=torch.int32)
     nearest_lattice[(len(flattened),)](
-        flattened, magnitudes.contiguous(), indices, len(flattened),
-        num_warps=4, enable_fp_fusion=False,
+        flattened,
+        magnitudes.contiguous(),
+        indices,
+        num_warps=4,
+        enable_fp_fusion=False,
     )
     return indices.reshape(inputs.shape[:-1])
