@@ -109,7 +109,7 @@ class Model(nn.Module):
         architecture: ArchitectureAdapter | None = None,
     ) -> None:
         super().__init__()
-        self.module = module
+        self.module = module.cuda()
         self.tokenizer = tokenizer
         self.name = name or type(module).__name__
         self.architecture = architecture or architecture_adapter(module)
@@ -130,7 +130,7 @@ class Model(nn.Module):
         tensor: Tensor | None = next(self.module.parameters(), None)
         if tensor is None:
             tensor = next(self.module.buffers(), None)
-        return torch.device("cpu") if tensor is None else tensor.device
+        return torch.device("cuda") if tensor is None else tensor.device
 
     @property
     def dtype(self) -> torch.dtype:
@@ -210,28 +210,16 @@ class QModel(Model):
         save(self, path, **options)
 
 
-def resolve_device(device: str | torch.device) -> torch.device:
-    if device == "auto":
-        device = "cuda"
-    selected = torch.device(device)
-    if selected.type != "cuda":
-        raise ValueError("mlkit model execution requires a CUDA device")
-    if not torch.cuda.is_available():
-        raise RuntimeError("mlkit requires a CUDA-enabled PyTorch installation and NVIDIA GPU")
-    return selected
-
-
 def load(
     name: str | Path,
     dtype: str | torch.dtype = "auto",
-    device: str | torch.device = "auto",
     **options: Any,
 ) -> Model:
     path = Path(name)
     if (path / "mlkit.json").is_file():
         from mlkit.serialization import load_checkpoint
 
-        return load_checkpoint(path, device=device, **options)
+        return load_checkpoint(path, **options)
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer
     except ImportError as error:
@@ -240,7 +228,7 @@ def load(
     module: nn.Module = AutoModelForCausalLM.from_pretrained(
         str(name), dtype=selected_dtype, **options
     )
-    module.to(resolve_device(device)).eval()
+    module.cuda().eval()
     tokenizer = AutoTokenizer.from_pretrained(str(name), trust_remote_code=False)
     return Model(module, tokenizer, name=str(name))
 

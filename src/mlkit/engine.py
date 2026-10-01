@@ -301,7 +301,8 @@ def quantize(
                 result if definition.passes else result.to("cpu", detach=True)
             )
             converted.layer_reports.append(LayerReport(
-                name, tuple(weight.shape), bits, weight.numel(), loss, duration, repr(quantization),
+                name, (weight.shape[0], weight.shape[1]), bits,
+                weight.numel(), loss, duration, repr(quantization),
             ))
             if definition.acts is not None:
                 activation_quantizer = resolve_activation(definition.acts, name, context)

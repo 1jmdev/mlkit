@@ -1,7 +1,10 @@
+import pytest
 import torch
 from torch import nn
 
 import mlkit as mk
+
+pytestmark = [pytest.mark.cuda, pytest.mark.usefixtures("cuda_tensors")]
 
 
 def test_codec_parameters_are_trained_and_cached() -> None:
@@ -30,7 +33,7 @@ def test_codec_parameters_are_trained_and_cached() -> None:
     assert observations["after"] < observations["before"]
     assert isinstance(converted.module[0], nn.Linear)
     assert converted.module[0].weight.requires_grad
-    torch.testing.assert_close(converted.module[0].weight, converted.quantized["0"].w)
+    torch.testing.assert_close(converted.module[0].weight.cpu(), converted.quantized["0"].w)
 
 
 def test_block_pass_configuration() -> None:

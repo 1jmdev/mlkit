@@ -6,6 +6,8 @@ from torch import nn
 
 import mlkit as mk
 
+pytestmark = [pytest.mark.cuda, pytest.mark.usefixtures("cuda_tensors")]
+
 
 class RepeatedModel(nn.Module):
     def __init__(self) -> None:

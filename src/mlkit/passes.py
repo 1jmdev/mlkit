@@ -145,6 +145,21 @@ def run_block_passes(
     finally:
         with torch.no_grad():
             for name, module, replacement in replacements:
+                full_name = f"{prefix}.{name}".strip(".")
+                quantized = model.quantized[full_name]
+                storage_formats = dict(quantized.metadata.get("parameter_formats", {}))
+                if quantized.codec in {"scaled", "feedback"}:
+                    storage_formats["scales"] = quantized.metadata.get("scale_fmt", "fp32")
+                    storage_formats["zero"] = quantized.metadata.get("scale_fmt", "fp32")
+                for parameter_name, format in storage_formats.items():
+                    identifier = replacement.parameter_names.get(parameter_name)
+                    if identifier is None:
+                        continue
+                    parameter = replacement.parameters_by_name[identifier]
+                    if format == "fp16":
+                        parameter.copy_(parameter.half().float())
+                    elif format == "bf16":
+                        parameter.copy_(parameter.bfloat16().float())
                 module.weight.copy_(replacement.weight.to(module.weight.dtype))
                 block.set_submodule(name, module)
             for name, parameter in block.named_parameters():

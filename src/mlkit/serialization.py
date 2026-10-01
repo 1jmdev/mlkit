@@ -7,17 +7,21 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import torch
 from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
 
 from mlkit.formats import decode_feedback, decode_scaled
-from mlkit.models import LayerReport, QModel, resolve_device
+from mlkit.models import LayerReport, QModel
 from mlkit.packing import pack, unpack
 from mlkit.representation import Q
+from mlkit.trellis import decode_trellis
 
-_CODECS: dict[str, Callable[..., Tensor]] = {"scaled": decode_scaled, "feedback": decode_feedback}
+_CODECS: dict[str, Callable[..., Tensor]] = {
+    "scaled": decode_scaled, "feedback": decode_feedback, "trellis": decode_trellis,
+}
 FORMAT_VERSION = 1
 
 
@@ -56,8 +60,18 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
                     if isinstance(value, Tensor):
                         identifier = f"{name}.params.{parameter_name}"
                         encoding = None
-                        if parameter_name in {"scales", "zero"}:
-                            format = quantized.metadata.get("scale_fmt", "fp32")
+                        parameter_bits = quantized.metadata.get("parameter_bits", {}).get(
+                            parameter_name
+                        )
+                        format = quantized.metadata.get("parameter_formats", {}).get(parameter_name)
+                        descriptor: dict[str, Any] = {"tensor": identifier, "encoding": None}
+                        if parameter_bits is not None:
+                            descriptor = {"tensor": identifier, "encoding": "packed",
+                                          "bits": parameter_bits, "shape": list(value.shape)}
+                            value = pack(value, parameter_bits)
+                        else:
+                            if parameter_name in {"scales", "zero"}:
+                                format = quantized.metadata.get("scale_fmt", "fp32")
                             if format == "fp16":
                                 value = value.half()
                             elif format == "bf16":
@@ -68,7 +82,9 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
                                 value = (value.float().log2().round() + 127).to(torch.uint8)
                                 encoding = "e8m0"
                         tensors[identifier] = value.detach().cpu().contiguous().clone()
-                        parameters[parameter_name] = {"tensor": identifier, "encoding": encoding}
+                        if encoding is not None:
+                            descriptor["encoding"] = encoding
+                        parameters[parameter_name] = descriptor
                     else:
                         parameters[parameter_name] = {"value": value}
                 layers[name] = {
@@ -81,6 +97,9 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
                 layers[name] = {"codec": None, "bits": quantized.bits}
         omitted = {f"{name}.weight" for name in model.quantized}
         for name, value in model.module.state_dict().items():
+            owner, _, field = name.rpartition(".")
+            if owner in model.quantized and field in {"packed", "scales", "values", "zeros"}:
+                continue
             if name not in omitted:
                 tensors[f"state.{name}"] = value.detach().cpu().contiguous().clone()
         save_file(tensors, str(temporary / "weights.safetensors"))
@@ -92,9 +111,11 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
         manifest = {
             "format_version": FORMAT_VERSION, "name": model.name,
             "architecture": "transformers" if configuration is not None else "external",
-            "dtype": str(next(model.module.parameters()).dtype).removeprefix("torch."),
+            "dtype": str(model.dtype).removeprefix("torch."),
             "layers": layers, "reports": [asdict(record) for record in model.layer_reports],
             "logical_bpw": model.bpw, "model_bpw": model.model_bpw,
+            "parameter_accounting": model._parameter_accounting,
+            "transforms": getattr(model.module, "_mlkit_transforms", []),
             "tensor_bytes": sum(value.numel() * value.element_size() for value in tensors.values()),
         }
         (temporary / "mlkit.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -120,7 +141,6 @@ def load_checkpoint(
     path: str | Path,
     *,
     model: nn.Module | Callable[[], nn.Module] | None = None,
-    device: str | torch.device = "auto",
 ) -> QModel:
     directory = Path(path)
     manifest = json.loads((directory / "mlkit.json").read_text())
@@ -142,6 +162,7 @@ def load_checkpoint(
             tokenizer = AutoTokenizer.from_pretrained(directory, trust_remote_code=False)
     elif not isinstance(model, nn.Module):
         model = model()
+    assert isinstance(model, nn.Module)
     tensors = load_file(str(directory / "weights.safetensors"))
     state = {name.removeprefix("state."): value for name, value in tensors.items()
              if name.startswith("state.")}
@@ -167,12 +188,19 @@ def load_checkpoint(
         converted.quantized[name] = quantized
         state[f"{name}.weight"] = quantized.w
     model.to(dtype=getattr(torch, manifest["dtype"]))
+    from mlkit.transforms import install_transform, record_transform
+
+    for descriptor in manifest.get("transforms", []):
+        install_transform(model, descriptor, state)
+        record_transform(model, descriptor)
     model.load_state_dict(state, strict=True)
-    model.to(resolve_device(device)).eval()
+    model.cuda().eval()
     converted.layer_reports = [
         LayerReport(**(record | {"shape": tuple(record["shape"])}))
         for record in manifest["reports"]
     ]
+    if manifest.get("parameter_accounting") is not None:
+        converted._parameter_accounting = tuple(manifest["parameter_accounting"])
     return converted
 
 
@@ -180,4 +208,6 @@ def decode_parameter(tensors: dict[str, Tensor], descriptor: dict) -> Tensor:
     value = tensors[descriptor["tensor"]]
     if descriptor.get("encoding") == "e8m0":
         return torch.pow(2.0, value.float() - 127)
+    if descriptor.get("encoding") == "packed":
+        return unpack(value, descriptor["bits"], tuple(descriptor["shape"]))
     return value.float() if value.dtype == torch.float8_e4m3fn else value

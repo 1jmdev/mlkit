@@ -14,7 +14,6 @@ import mlkit as mk
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="Qwen/Qwen2.5-0.5B")
-    parser.add_argument("--device", default="cuda")
     parser.add_argument("--sequence", type=int, default=256)
     parser.add_argument("--calibration-batches", type=int, default=8)
     parser.add_argument("--evaluation-batches", type=int, default=16)
@@ -22,7 +21,7 @@ def main() -> None:
         "--output", type=Path, default=Path("benchmark_results/model_evaluation.json")
     )
     arguments = parser.parse_args()
-    model = mk.load(arguments.model, device=arguments.device, dtype="float16")
+    model = mk.load(arguments.model, dtype="float16")
     calibration = mk.data("wikitext2", n=arguments.calibration_batches, seq=arguments.sequence,
                           tokenizer=model.tokenizer, seed=17)
     evaluation = mk.data("wikitext2", n=arguments.evaluation_batches, seq=arguments.sequence,

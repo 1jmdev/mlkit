@@ -46,8 +46,10 @@ class DataSource:
     def bind(self, tokenizer: Any) -> TokenBatches:
         if tokenizer is None:
             raise ValueError("text calibration requires a model tokenizer or pretokenized batches")
-        return data(self.name, self.n, self.seq, self.split, tokenizer=tokenizer,
-                    seed=self.seed, streaming=self.streaming)
+        result = data(self.name, self.n, self.seq, self.split, tokenizer=tokenizer,
+                      seed=self.seed, streaming=self.streaming)
+        assert isinstance(result, TokenBatches)
+        return result
 
 
 def normalize_batches(value: Any) -> list[Any]:

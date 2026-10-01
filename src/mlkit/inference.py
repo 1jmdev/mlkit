@@ -12,7 +12,7 @@ import torch.nn.functional as functional
 from torch import Tensor, nn
 
 from mlkit.engine import forward_batch, synchronize
-from mlkit.models import Model, QModel, resolve_device
+from mlkit.models import Model, QModel
 from mlkit.packing import pack
 from mlkit.representation import Q
 
@@ -120,7 +120,6 @@ def optimize(
     if backend not in {"auto", "dense", "packed"}:
         raise ValueError("backend must be auto, dense, or packed")
     wrapped = model if isinstance(model, Model) else Model(model)
-    resolve_device(wrapped.device)
     converted = wrapped if inplace else copy.deepcopy(wrapped)
     if isinstance(converted, QModel):
         _ = converted.model_bpw
@@ -204,12 +203,11 @@ class BenchmarkResult:
 def benchmark(
     operation: Callable[[], Any],
     *,
-    device: str | torch.device = "cuda",
     warmup: int = 10,
     repetitions: int = 50,
 ) -> BenchmarkResult:
     """Synchronize outside each timed interval; exclude warmup and compilation."""
-    selected_device = resolve_device(device)
+    selected_device = torch.device("cuda", torch.cuda.current_device())
     if warmup < 0 or repetitions < 1:
         raise ValueError("warmup must be nonnegative and repetitions must be positive")
     samples = []
@@ -235,4 +233,4 @@ def benchmark(
 
 def benchmark_model(model: Model | nn.Module, batch: Any, **options: Any) -> BenchmarkResult:
     wrapped = model if isinstance(model, Model) else Model(model)
-    return benchmark(lambda: forward_batch(wrapped.module, batch), device=wrapped.device, **options)
+    return benchmark(lambda: forward_batch(wrapped.module, batch), **options)

@@ -1,10 +1,13 @@
 from types import SimpleNamespace
 
+import pytest
 import torch
 import torch.nn.functional as functional
 from torch import nn
 
 import mlkit as mk
+
+pytestmark = [pytest.mark.cuda, pytest.mark.usefixtures("cuda_tensors")]
 
 
 class CausalModel(nn.Module):

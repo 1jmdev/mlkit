@@ -23,6 +23,8 @@ from mlkit.protocol import Quantizer, quantizer
 from mlkit.recipes import Recipe
 from mlkit.representation import Q
 from mlkit.serialization import codec, load_checkpoint, save
+from mlkit.transforms import fuse_norms, rotate, smooth
+from mlkit.trellis import Trellis, one_mad, trellis, viterbi
 
 __version__ = "0.1.0"
 
@@ -35,4 +37,6 @@ __all__ = [
     "unpack", "BlockPassCtx", "block_pass", "finetune", "model_pass", "norm_params",
     "BenchmarkResult", "PackedLinear", "benchmark", "benchmark_model", "export_torchao", "optimize",
     "DataSource",
+    "Trellis", "one_mad", "trellis", "viterbi",
+    "fuse_norms", "rotate", "smooth",
 ]

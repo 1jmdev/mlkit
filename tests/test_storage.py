@@ -23,6 +23,8 @@ def test_unsigned_storage_validation() -> None:
         mk.unpack(torch.zeros(1, dtype=torch.uint8), 4, (4,))
 
 
+@pytest.mark.cuda
+@pytest.mark.usefixtures("cuda_tensors")
 def test_checkpoint_round_trip(tmp_path) -> None:
     def create_model():
         return nn.Sequential(nn.Linear(32, 16), nn.ReLU(), nn.Linear(16, 8))
@@ -31,7 +33,7 @@ def test_checkpoint_round_trip(tmp_path) -> None:
     converted = mk.quantize(model, mk.int(4, group=8), calib=None)
     directory = tmp_path / "checkpoint"
     converted.save(directory)
-    restored = mk.load_checkpoint(directory, model=create_model, device="cpu")
+    restored = mk.load_checkpoint(directory, model=create_model)
     inputs = torch.randn(4, 32)
     torch.testing.assert_close(restored(inputs), converted(inputs), rtol=0, atol=0)
     assert restored.bpw == converted.bpw
@@ -44,12 +46,14 @@ def test_checkpoint_round_trip(tmp_path) -> None:
     converted.save(directory, overwrite=True)
 
 
+@pytest.mark.cuda
+@pytest.mark.usefixtures("cuda_tensors")
 def test_custom_reconstruction_checkpoint(tmp_path) -> None:
     model = nn.Sequential(nn.Linear(8, 4))
     converted = mk.quantize(model, lambda w, ctx: w.round(), calib=None)
     converted.save(tmp_path / "checkpoint")
     restored = mk.load_checkpoint(
-        tmp_path / "checkpoint", model=lambda: nn.Sequential(nn.Linear(8, 4)), device="cpu"
+        tmp_path / "checkpoint", model=lambda: nn.Sequential(nn.Linear(8, 4))
     )
     assert restored.bpw is None
     torch.testing.assert_close(converted.module[0].weight, restored.module[0].weight)

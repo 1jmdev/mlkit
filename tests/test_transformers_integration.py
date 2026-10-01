@@ -5,11 +5,11 @@ import mlkit as mk
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_downloaded_llama_conversion(device: str, tmp_path) -> None:
-    if device == "cuda" and not torch.cuda.is_available():
+@pytest.mark.cuda
+def test_downloaded_llama_conversion(tmp_path) -> None:
+    if not torch.cuda.is_available():
         pytest.skip("CUDA is unavailable")
-    model = mk.load("hf-internal-testing/tiny-random-LlamaForCausalLM", device=device)
+    model = mk.load("hf-internal-testing/tiny-random-LlamaForCausalLM")
     generator = torch.Generator().manual_seed(37)
     batches = [{"input_ids": torch.randint(100, 2000, (1, 32), generator=generator)}
                for _ in range(3)]
@@ -21,9 +21,9 @@ def test_downloaded_llama_conversion(device: str, tmp_path) -> None:
     score = mk.ppl(converted, data=batches, budget="full")
     assert abs(score - baseline) / baseline < 0.02
     converted.save(tmp_path / "llama_checkpoint")
-    restored = mk.load(tmp_path / "llama_checkpoint", device=device)
+    restored = mk.load(tmp_path / "llama_checkpoint")
     assert restored.bpw == converted.bpw
-    tokens = batches[0]["input_ids"].to(device)
+    tokens = batches[0]["input_ids"].cuda()
     with torch.no_grad():
         torch.testing.assert_close(
             converted(tokens).logits, restored(tokens).logits, rtol=0, atol=0
