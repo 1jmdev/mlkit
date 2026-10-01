@@ -1,5 +1,6 @@
 """Composable calibration algorithms and changes of basis."""
 
+import math
 from collections.abc import Callable
 from typing import Any
 
@@ -7,9 +8,11 @@ import torch
 from torch import Tensor
 
 from mlkit.context import Ctx, layer_seed
-from mlkit.operations import hadamard, proxy_loss
+from mlkit.formats import Scaled, decode_feedback
+from mlkit.operations import proxy_loss
 from mlkit.protocol import Quantizer, fit_quantizer
 from mlkit.representation import Q, as_q
+from mlkit.rotations import structured_transform
 
 QuantizerFunction = Callable[[Tensor, Ctx], Q | Tensor]
 
@@ -37,6 +40,7 @@ class ErrorFeedback(Quantizer):
         damp: float = 0.01,
         order: str = "natural",
         block_size: int = 128,
+        backend: str = "auto",
     ) -> None:
         if step < 1 or block_size < step or block_size % step:
             raise ValueError("block_size must be a positive multiple of step")
@@ -50,6 +54,9 @@ class ErrorFeedback(Quantizer):
         self.damp = damp
         self.order = order
         self.block_size = block_size
+        if backend not in {"auto", "torch", "triton"}:
+            raise ValueError("error-feedback backend must be auto, torch, or triton")
+        self.backend = backend
 
     def __call__(self, w: Tensor, ctx: Ctx | None = None) -> Q:
         ctx = ctx or Ctx(device=w.device)
@@ -74,9 +81,15 @@ class ErrorFeedback(Quantizer):
         if status.item() != 0:
             raise ValueError("calibration Hessian is not positive definite; increase damp")
         inverse = torch.cholesky_inverse(factor)
-        upper = torch.linalg.cholesky(inverse, upper=True)
+        upper = torch.linalg.cholesky(inverse, upper=True).contiguous()
         output = torch.empty_like(working)
         total_bits: float | None = 0.0
+        encoded = None
+        codec_parameters = None
+        codec_metadata = None
+        region_scales = []
+        region_zeros = []
+        retain_codec = True
         refit_width = width if self.refit is None else self.refit
         for region_start in range(0, width, refit_width):
             region_stop = min(width, region_start + refit_width)
@@ -88,6 +101,37 @@ class ErrorFeedback(Quantizer):
             )
             if fitted_context is not ctx:
                 ctx.add_bits(fitted_context._additional_bits)
+            use_fused = (
+                working.device.type == "cuda" and self.backend != "torch" and self.step == 1
+                and isinstance(self.inner, Scaled) and self.inner.grid.name.startswith("int")
+            )
+            if self.backend == "triton" and not use_fused:
+                raise ValueError("fused GPTQ requires CUDA, step=1, and a scaled integer grid")
+            if use_fused:
+                from mlkit.kernels.error_feedback import round_tile
+
+                initial = rounder(working[:, region_start:region_stop], slice(None))
+                assert initial.codes is not None
+                if encoded is None:
+                    encoded = torch.empty_like(working, dtype=initial.codes.dtype)
+                    codec_parameters, codec_metadata = initial.params, initial.metadata
+                region_scales.append(initial.params["scales"])
+                if initial.params["zero"] is not None:
+                    region_zeros.append(initial.params["zero"])
+                total_bits = None if total_bits is None or initial.bits is None else (
+                    total_bits + initial.bits
+                )
+                for tile_start in range(region_start, region_stop, self.block_size):
+                    tile_stop = min(region_stop, tile_start + self.block_size)
+                    errors = working.new_empty((working.shape[0], tile_stop - tile_start))
+                    round_tile(
+                        working, upper, initial.params["scales"], initial.params["zero"],
+                        output, encoded, errors, region_start=region_start,
+                        tile_start=tile_start, group=initial.params["group"],
+                        bits=self.inner.grid.bits,
+                    )
+                    working[:, tile_stop:] -= errors @ upper[tile_start:tile_stop, tile_stop:]
+                continue
             for tile_start in range(region_start, region_stop, self.block_size):
                 tile_stop = min(region_stop, tile_start + self.block_size)
                 tile = working[:, tile_start:tile_stop].clone()
@@ -101,6 +145,19 @@ class ErrorFeedback(Quantizer):
                         slice(column - region_start, stop - region_start),
                     ))
                     reconstruction = quantized.w
+                    if retain_codec:
+                        if quantized.codec != "scaled" or quantized.codes is None:
+                            retain_codec = False
+                        else:
+                            if encoded is None:
+                                encoded = torch.empty_like(working, dtype=quantized.codes.dtype)
+                                codec_parameters = quantized.params
+                                codec_metadata = quantized.metadata
+                            encoded[:, column:stop] = quantized.codes
+                            if column == region_start:
+                                region_scales.append(quantized.params["scales"])
+                                if quantized.params["zero"] is not None:
+                                    region_zeros.append(quantized.params["zero"])
                     if reconstruction.shape != tile[:, local:local_stop].shape:
                         raise ValueError("inner quantizer changed the shape of a column slice")
                     output[:, column:stop] = reconstruction
@@ -120,6 +177,21 @@ class ErrorFeedback(Quantizer):
                 working[:, tile_stop:] -= errors @ upper[tile_start:tile_stop, tile_stop:]
         if permutation is not None:
             output = output[:, permutation.argsort()]
+        if retain_codec and encoded is not None:
+            assert codec_parameters is not None and codec_metadata is not None
+            if permutation is not None:
+                ctx.add_bits(width * math.ceil(math.log2(width)))
+            return Q(
+                codes=encoded, bits=total_bits, codec="feedback", decode=decode_feedback,
+                params={
+                    "scales": torch.cat(region_scales, dim=1),
+                    "values": codec_parameters["values"], "group": codec_parameters["group"],
+                    "refit": refit_width,
+                    "zero": torch.cat(region_zeros, dim=1) if region_zeros else None,
+                    "permutation": permutation,
+                },
+                metadata=codec_metadata,
+            )
         return Q(output, bits=total_bits)
 
     def __repr__(self) -> str:
@@ -194,9 +266,9 @@ class Incoherent(Quantizer):
         right_signs = signs(w.shape[1]) if self.right else None
         transformed = w.float()
         if left_signs is not None:
-            transformed = hadamard((transformed * left_signs[:, None]).T).T
+            transformed = structured_transform((transformed * left_signs[:, None]).T).T
         if right_signs is not None:
-            transformed = hadamard(transformed * right_signs)
+            transformed = structured_transform(transformed * right_signs)
         transformed_context = ctx.replace()
         if right_signs is not None:
             original_provider = transformed_context._provider
@@ -204,10 +276,10 @@ class Incoherent(Quantizer):
             def provider(name: str, fn: Callable | None, reduce: str) -> Tensor:
                 if name == "H":
                     hessian = ctx.H.to(w.device) * right_signs[:, None] * right_signs[None, :]
-                    return hadamard(hadamard(hessian).T).T
+                    return structured_transform(structured_transform(hessian).T).T
                 if name == "X":
-                    return hadamard(ctx.X.to(w.device) * right_signs)
-                inputs = hadamard(ctx.X.to(w.device) * right_signs)
+                    return structured_transform(ctx.X.to(w.device) * right_signs)
+                inputs = structured_transform(ctx.X.to(w.device) * right_signs)
                 if name == "act_absmean":
                     return inputs.abs().mean(0)
                 if name == "act_absmax":
@@ -223,9 +295,11 @@ class Incoherent(Quantizer):
         quantized = as_q(self.inner(transformed, transformed_context))
         reconstruction = quantized.w
         if right_signs is not None:
-            reconstruction = hadamard(reconstruction) * right_signs
+            reconstruction = structured_transform(reconstruction, inverse=True) * right_signs
         if left_signs is not None:
-            reconstruction = hadamard(reconstruction.T).T * left_signs[:, None]
+            reconstruction = (
+                structured_transform(reconstruction.T, inverse=True).T * left_signs[:, None]
+            )
         ctx.add_bits(transformed_context._additional_bits)
         return Q(reconstruction, bits=quantized.bits)
 
@@ -246,13 +320,16 @@ class BestOf(Quantizer):
         minimum_loss = float("inf")
         base_bits, selected_bits = ctx._additional_bits, 0.0
         for quantization in self.candidates:
-            candidate_context = ctx.replace()
+            candidate_context = ctx.replace(cache=dict(ctx.cache))
             candidate = as_q(quantization(w, candidate_context))
             loss = float(proxy_loss(w, candidate.w, ctx if self.by == "proxy" else None))
             if loss < minimum_loss:
                 selected, minimum_loss = candidate, loss
                 selected_bits = candidate_context._additional_bits
+                selected_cache = candidate_context.cache
         ctx._additional_bits = base_bits + selected_bits
+        ctx.cache.clear()
+        ctx.cache.update(selected_cache)
         assert selected is not None
         return selected
 

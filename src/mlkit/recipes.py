@@ -56,7 +56,7 @@ def preset(name: str) -> Recipe:
     match = re.fullmatch(r"(rtn|gptq|awq)-int([2-8])-g([1-9][0-9]*)", name)
     if match:
         method, bits, group = match.groups()
-        quantization = int(builtins_int(bits), group=builtins_int(group))
+        quantization: Quantizer = int(builtins_int(bits), group=builtins_int(group))
         if method == "gptq":
             quantization = gptq(quantization, refit=builtins_int(group))
         elif method == "awq":

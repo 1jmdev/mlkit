@@ -12,12 +12,12 @@ import torch
 from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
 
-from mlkit.formats import decode_scaled
+from mlkit.formats import decode_feedback, decode_scaled
 from mlkit.models import LayerReport, QModel, resolve_device
 from mlkit.packing import pack, unpack
 from mlkit.representation import Q
 
-_CODECS: dict[str, Callable[..., Tensor]] = {"scaled": decode_scaled}
+_CODECS: dict[str, Callable[..., Tensor]] = {"scaled": decode_scaled, "feedback": decode_feedback}
 FORMAT_VERSION = 1
 
 
@@ -55,14 +55,20 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
                 for parameter_name, value in quantized.params.items():
                     if isinstance(value, Tensor):
                         identifier = f"{name}.params.{parameter_name}"
-                        if parameter_name == "scales":
+                        encoding = None
+                        if parameter_name in {"scales", "zero"}:
                             format = quantized.metadata.get("scale_fmt", "fp32")
                             if format == "fp16":
                                 value = value.half()
                             elif format == "bf16":
                                 value = value.bfloat16()
+                            elif format == "fp8":
+                                value = value.to(torch.float8_e4m3fn)
+                            elif format == "e8m0":
+                                value = (value.float().log2().round() + 127).to(torch.uint8)
+                                encoding = "e8m0"
                         tensors[identifier] = value.detach().cpu().contiguous().clone()
-                        parameters[parameter_name] = {"tensor": identifier}
+                        parameters[parameter_name] = {"tensor": identifier, "encoding": encoding}
                     else:
                         parameters[parameter_name] = {"value": value}
                 layers[name] = {
@@ -147,7 +153,7 @@ def load_checkpoint(
             codes = unpack(tensors[f"{name}.codes"], layer["code_bits"], tuple(layer["shape"]))
             parameters = {
                 parameter_name: (
-                    tensors[value["tensor"]] if "tensor" in value else value["value"]
+                    decode_parameter(tensors, value) if "tensor" in value else value["value"]
                 )
                 for parameter_name, value in layer["params"].items()
             }
@@ -168,3 +174,10 @@ def load_checkpoint(
         for record in manifest["reports"]
     ]
     return converted
+
+
+def decode_parameter(tensors: dict[str, Tensor], descriptor: dict) -> Tensor:
+    value = tensors[descriptor["tensor"]]
+    if descriptor.get("encoding") == "e8m0":
+        return torch.pow(2.0, value.float() - 127)
+    return value.float() if value.dtype == torch.float8_e4m3fn else value

@@ -35,7 +35,7 @@ def model_pass(function: Callable) -> ConfiguredPass:
 
 
 def norm_params(block: nn.Module) -> list[nn.Parameter]:
-    parameters = []
+    parameters: list[nn.Parameter] = []
     for module in block.modules():
         if isinstance(module, nn.LayerNorm) or "rmsnorm" in type(module).__name__.lower():
             parameters.extend(module.parameters(recurse=False))
@@ -118,7 +118,7 @@ def run_block_passes(
     targets = session.targets[index]
     prefix = model.architecture.block_name(index)
     replacements: list[tuple[str, nn.Linear, CodecLinear]] = []
-    qparams = []
+    qparams: list[nn.Parameter] = []
     original_gradients = {
         name: parameter.requires_grad for name, parameter in block.named_parameters()
     }

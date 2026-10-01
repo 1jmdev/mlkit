@@ -12,7 +12,7 @@ import torch
 from torch import Tensor, nn
 
 from mlkit.context import Ctx
-from mlkit.data import TokenBatches, data, normalize_batches
+from mlkit.data import DataSource, TokenBatches, data, normalize_batches
 from mlkit.models import LayerReport, Model, QModel, architecture_adapter, extract_hidden
 from mlkit.operations import proxy_loss
 from mlkit.recipes import Recipe, normalize_recipe
@@ -95,6 +95,8 @@ class CalibrationSession:
         calibration = self.calibration
         if isinstance(calibration, str):
             calibration = data(calibration, tokenizer=self.model.tokenizer)
+        if isinstance(calibration, DataSource):
+            calibration = calibration.bind(self.model.tokenizer)
         if calibration is None:
             raise ValueError("this quantizer requires calibration; supply calib token batches")
         self.batches = normalize_batches(calibration)
@@ -246,6 +248,7 @@ def quantize(
     if definition.kv is not None:
         raise NotImplementedError("KV quantization requires an architecture-specific cache adapter")
     converted_module = copy.deepcopy(source.module).eval()
+    normalize_affine_layers(converted_module)
     converted = QModel(converted_module, source.tokenizer, name=source.name)
     converted.architecture = architecture_adapter(converted_module)
     for transform in definition.transforms:
@@ -324,6 +327,10 @@ def quantize(
 
             run_block_passes(converted, index, block, original_block, session, definition.passes)
         session.propagate(index, block)
+        if definition.acts is not None:
+            original_block.to("cpu")
+            for context in contexts.values():
+                context._stats = {name: value.cpu() for name, value in context._stats.items()}
         del original_block, statistics, contexts
     for model_pass in definition.model_passes:
         model_pass(converted, session)
@@ -334,3 +341,20 @@ def resolve_activation(value: Any, name: str, context: Ctx) -> Any:
     if isinstance(value, Mapping):
         return Recipe(weights=value).select(name, context)
     return value
+
+
+def normalize_affine_layers(model: nn.Module) -> None:
+    """Convert Hugging Face GPT-2 Conv1D projections to ordinary Linear layers."""
+    for name, module in list(model.named_modules()):
+        if (type(module).__name__ != "Conv1D"
+                or not type(module).__module__.startswith("transformers.")):
+            continue
+        weight = module.weight
+        converted = nn.Linear(weight.shape[0], weight.shape[1], bias=module.bias is not None,
+                              device=weight.device, dtype=weight.dtype)
+        with torch.no_grad():
+            converted.weight.copy_(weight.T)
+            if converted.bias is not None:
+                converted.bias.copy_(module.bias)
+        converted.weight.requires_grad_(weight.requires_grad)
+        model.set_submodule(name, converted)

@@ -16,8 +16,8 @@ import torch.nn.functional as functional
 from torch import Tensor, nn
 
 from mlkit.context import Ctx
+from mlkit.data import DataSource, normalize_batches
 from mlkit.data import data as tokenize_data
-from mlkit.data import normalize_batches
 from mlkit.engine import BlockStatistics, CalibrationSession, quantize, synchronize
 from mlkit.models import Model
 from mlkit.operations import proxy_loss
@@ -115,6 +115,8 @@ def ppl(
         )
     if isinstance(data, Tensor):
         data = {"input_ids": data.unsqueeze(0) if data.ndim == 1 else data}
+    if isinstance(data, DataSource):
+        data = data.bind(wrapped.tokenizer)
     batches = normalize_batches(data)
     training_states = [(module, module.training) for module in wrapped.modules()]
     wrapped.eval()

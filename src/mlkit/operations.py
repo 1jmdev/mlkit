@@ -126,10 +126,9 @@ def hadamard(value: Tensor, *, normalize: bool = True) -> Tensor:
 
 
 def rht(value: Tensor, *, seed: int = 0, inverse: bool = False) -> Tensor:
-    generator = torch.Generator(device=value.device).manual_seed(seed)
-    signs = torch.randint(2, (value.shape[-1],), generator=generator, device=value.device)
-    signs = signs.to(value.dtype) * 2 - 1
-    return hadamard(value) * signs if inverse else hadamard(value * signs)
+    from mlkit.rotations import randomized_transform
+
+    return randomized_transform(value, seed=seed, inverse=inverse)
 
 
 def proxy_loss(weight: Tensor, reconstruction: Tensor, ctx: Ctx | None = None) -> Tensor:

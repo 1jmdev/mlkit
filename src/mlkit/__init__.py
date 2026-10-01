@@ -2,7 +2,7 @@
 
 from mlkit.algorithms import awq, best_of, gptq, incoherent, ldlq, rtn
 from mlkit.context import Ctx
-from mlkit.data import TokenBatches, data
+from mlkit.data import DataSource, TokenBatches, data
 from mlkit.engine import quantize
 from mlkit.evaluation import PerplexityResult, Table, compare, eval, ppl, probe, sweep
 from mlkit.formats import int, mxfp4, nf4, scaled
@@ -34,4 +34,5 @@ __all__ = [
     "proxy_loss", "quantize", "quantizer", "rht", "rtn", "save", "scaled", "snap", "sweep",
     "unpack", "BlockPassCtx", "block_pass", "finetune", "model_pass", "norm_params",
     "BenchmarkResult", "PackedLinear", "benchmark", "benchmark_model", "export_torchao", "optimize",
+    "DataSource",
 ]

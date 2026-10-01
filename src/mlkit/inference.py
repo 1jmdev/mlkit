@@ -22,10 +22,15 @@ class PackedLinear(nn.Module):
 
     def __init__(self, original: nn.Linear, quantized: Q, *, cache_dense: bool = False) -> None:
         super().__init__()
-        if quantized.codec != "scaled" or quantized.metadata.get("code_bits") != 4:
+        if (quantized.codec not in {"scaled", "feedback"}
+                or quantized.metadata.get("code_bits") != 4):
             raise ValueError("PackedLinear requires a four-bit scalar-grid codec")
         if quantized.params.get("offset", 0) != 0:
             raise ValueError("PackedLinear requires a complete fitted region")
+        if quantized.params.get("permutation") is not None:
+            raise ValueError("PackedLinear requires weights in their original column order")
+        if quantized.params.get("refit", quantized.params["group"]) % quantized.params["group"]:
+            raise ValueError("PackedLinear requires refit boundaries aligned with scale groups")
         assert quantized.codes is not None
         device = original.weight.device
         self.in_features = original.in_features
@@ -42,18 +47,35 @@ class PackedLinear(nn.Module):
             "bias", None if original.bias is None else original.bias.detach().clone()
         )
         self.register_buffer("_dense_weight", None, persistent=False)
-        self.maximum_fused_rows = 4
+        self.maximum_fused_rows = 1
+        scalar_values = quantized.params["values"].cpu().float()
+        differences = scalar_values.diff()
+        self.uniform_grid = bool(len(differences) and torch.allclose(
+            differences, differences[0].expand_as(differences)
+        ))
+        self.grid_minimum = float(scalar_values[0])
+        self.grid_step = float(differences[0]) if len(differences) else 1.0
 
     @property
     def weight(self) -> Tensor:
         if self._dense_weight is not None:
             return self._dense_weight
-        codes = unpack(self.packed, 4, (self.out_features, self.in_features)).long()
-        positions = torch.arange(self.in_features, device=self.packed.device) // self.group
-        reconstruction = self.values[codes] * self.scales[:, positions]
-        if self.zeros is not None:
-            reconstruction += self.zeros[:, positions]
-        reconstruction = reconstruction.to(self.storage_dtype)
+        if self.packed.device.type == "cuda":
+            from mlkit.kernels.packed_linear import decode
+
+            reconstruction = torch.empty(
+                (self.out_features, self.in_features), device=self.packed.device,
+                dtype=self.storage_dtype,
+            )
+            decode(self.packed, self.scales, self.values, self.zeros, reconstruction,
+                   self.group, self.uniform_grid, self.grid_minimum, self.grid_step)
+        else:
+            codes = unpack(self.packed, 4, (self.out_features, self.in_features)).long()
+            positions = torch.arange(self.in_features, device=self.packed.device) // self.group
+            reconstruction = self.values[codes] * self.scales[:, positions]
+            if self.zeros is not None:
+                reconstruction += self.zeros[:, positions]
+            reconstruction = reconstruction.to(self.storage_dtype)
         if self.cache_dense:
             self._dense_weight = reconstruction
         return reconstruction
@@ -71,7 +93,8 @@ class PackedLinear(nn.Module):
             output = inputs.new_empty((len(flattened), self.out_features))
             matrix_vector(
                 flattened, self.packed, self.scales, self.values, self.zeros, self.bias,
-                output, self.group,
+                output, self.group, uniform_grid=self.uniform_grid,
+                grid_minimum=self.grid_minimum, grid_step=self.grid_step,
             )
             return output.reshape(*shape[:-1], self.out_features)
         return functional.linear(inputs, self.weight.to(inputs.dtype), self.bias)
@@ -109,8 +132,14 @@ def optimize(
         replaced = 0
         for name, quantized in converted.quantized.items():
             module = converted.module.get_submodule(name)
-            if (isinstance(module, nn.Linear) and quantized.codec == "scaled"
-                    and quantized.metadata.get("code_bits") == 4):
+            compatible = (
+                quantized.codec in {"scaled", "feedback"}
+                and quantized.metadata.get("code_bits") == 4
+                and quantized.params.get("permutation") is None
+                and not quantized.params.get("refit", quantized.params["group"])
+                % quantized.params["group"]
+            ) if quantized.codec in {"scaled", "feedback"} else False
+            if isinstance(module, nn.Linear) and compatible:
                 converted.module.set_submodule(name, PackedLinear(
                     module, quantized, cache_dense=cache_dense
                 ))

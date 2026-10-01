@@ -22,6 +22,8 @@ class Quantizer:
 
 
 class FunctionQuantizer(Quantizer):
+    __name__: str
+
     def __init__(self, function: Callable[..., Q | Tensor], parameters: dict[str, Any]) -> None:
         functools.update_wrapper(self, function)
         self.function = function

@@ -2,6 +2,7 @@
 
 import hashlib
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -33,6 +34,22 @@ class TokenBatches(Sequence[dict[str, Tensor]]):
         return digest.hexdigest()
 
 
+@dataclass(frozen=True)
+class DataSource:
+    name: str | Sequence[str]
+    n: int | None = 128
+    seq: int = 2048
+    split: str = "train"
+    seed: int = 0
+    streaming: bool = True
+
+    def bind(self, tokenizer: Any) -> TokenBatches:
+        if tokenizer is None:
+            raise ValueError("text calibration requires a model tokenizer or pretokenized batches")
+        return data(self.name, self.n, self.seq, self.split, tokenizer=tokenizer,
+                    seed=self.seed, streaming=self.streaming)
+
+
 def normalize_batches(value: Any) -> list[Any]:
     if isinstance(value, Mapping):
         return [dict(value)]
@@ -52,16 +69,17 @@ def data(
     tokenizer: Any = None,
     seed: int = 0,
     streaming: bool = True,
-) -> TokenBatches:
+) -> TokenBatches | DataSource:
     """Tokenize text using an explicit tokenizer and deterministic sampling.
 
     Evaluation splits use contiguous, nonoverlapping windows. Training uses
     seeded random windows. No tokenizer is guessed for model-independent data.
     """
-    if tokenizer is None:
-        raise ValueError("data requires tokenizer=model.tokenizer; token IDs are model-specific")
     if seq < 2 or (n is not None and n < 1):
         raise ValueError("sequence length must be at least two and n must be positive or None")
+    if tokenizer is None:
+        return DataSource(name, n, seq, split, seed, streaming)
+    texts: Iterable[str]
     if isinstance(name, str):
         try:
             from datasets import load_dataset
@@ -103,6 +121,7 @@ def data(
         raise ValueError(f"corpus has only {count} tokens, fewer than sequence length {seq}")
     tokens = torch.tensor(token_parts, dtype=torch.long)
     number = count // seq if n is None else n
+    starts: Iterable[int]
     if split == "train":
         generator = torch.Generator().manual_seed(seed)
         starts = torch.randint(count - seq + 1, (number,), generator=generator).tolist()

@@ -34,7 +34,7 @@ class Ctx:
         cache: dict[str, Any] | None = None,
         siblings: tuple[str, ...] = (),
         seed: int = 0,
-        device: str | torch.device = "cpu",
+        device: str | torch.device | None = None,
     ) -> None:
         self.name = name
         self.module = module
@@ -49,7 +49,8 @@ class Ctx:
             self._stats["X"] = X
         self._provider = provider
         self._seed = seed
-        self._device = torch.device(device)
+        statistic_device = H.device if H is not None else X.device if X is not None else "cpu"
+        self._device = torch.device(statistic_device if device is None else device)
         self.rng = torch.Generator(device=self._device).manual_seed(layer_seed(name, seed))
         self._additional_bits = 0.0
 
@@ -81,7 +82,7 @@ class Ctx:
                     f"layer {self.name!r} needs calibration statistic {name!r}; "
                     "supply calibration data to quantize, or construct Ctx(X=...) / Ctx(H=...)"
                 )
-        return self._stats[name]
+        return self._stats[name].to(self._device)
 
     @property
     def H(self) -> Tensor:

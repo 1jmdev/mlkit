@@ -19,8 +19,8 @@ def decode_scaled(
     *,
     scales: Tensor,
     values: Tensor,
-    group: int,
-    offset: int = 0,
+    group: builtins.int,
+    offset: builtins.int = 0,
     zero: Tensor | None = None,
 ) -> Tensor:
     columns = torch.arange(offset, offset + codes.shape[1], device=codes.device) // group
@@ -28,7 +28,26 @@ def decode_scaled(
     return reconstruction if zero is None else reconstruction + zero[:, columns]
 
 
-def store_scale(value: Tensor, format: str | Grid) -> tuple[Tensor, int]:
+def decode_feedback(
+    codes: Tensor,
+    *,
+    scales: Tensor,
+    values: Tensor,
+    group: builtins.int,
+    refit: builtins.int,
+    zero: Tensor | None = None,
+    permutation: Tensor | None = None,
+) -> Tensor:
+    columns = torch.arange(codes.shape[1], device=codes.device)
+    groups_per_region = (refit + group - 1) // group
+    scale_indices = (columns // refit) * groups_per_region + (columns % refit) // group
+    reconstruction = values[codes.long()] * scales[:, scale_indices]
+    if zero is not None:
+        reconstruction = reconstruction + zero[:, scale_indices]
+    return reconstruction if permutation is None else reconstruction[:, permutation.argsort()]
+
+
+def store_scale(value: Tensor, format: str | Grid) -> tuple[Tensor, builtins.int]:
     if isinstance(format, Grid):
         if format.dim != 1:
             raise ValueError("scale grids must be scalar")
@@ -50,12 +69,12 @@ class Scaled(Quantizer):
     def __init__(
         self,
         grid: Grid,
-        group: int | None = 128,
+        group: builtins.int | None = 128,
         scale: str | Callable[[Tensor], Tensor] = "absmax",
         scale_fmt: str | Grid = "fp16",
         asym: bool = False,
         *,
-        search_steps: int = 20,
+        search_steps: builtins.int = 20,
     ) -> None:
         if group is not None and group <= 0:
             raise ValueError("group must be positive or None")
@@ -65,6 +84,8 @@ class Scaled(Quantizer):
             raise ValueError("search_steps must be positive")
         if asym and (grid.dim != 1 or grid.values is None):
             raise ValueError("asymmetric quantization requires an explicit scalar grid")
+        if asym and (scale_fmt == "e8m0" or isinstance(scale_fmt, Grid)):
+            raise ValueError("asymmetric offsets require a signed floating-point storage format")
         self.grid = grid
         self.group = group
         self.scale = scale
@@ -174,7 +195,7 @@ class Scaled(Quantizer):
 
 def scaled(
     grid: Grid,
-    group: int | None = 128,
+    group: builtins.int | None = 128,
     scale: str | Callable[[Tensor], Tensor] = "absmax",
     scale_fmt: str | Grid = "fp16",
     asym: bool = False,

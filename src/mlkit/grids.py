@@ -54,7 +54,7 @@ class GridFactory:
             bits, values=values, name=f"int{bits}",
         )
 
-    def values(self, values: Tensor, *, bits: int | None = None) -> Grid:
+    def values(self, values: Tensor, *, bits: builtins.int | None = None) -> Grid:
         values = torch.as_tensor(values, dtype=torch.float32).flatten().sort().values
         if not values.numel() or not torch.isfinite(values).all():
             raise ValueError("a scalar codebook must contain finite values")
@@ -63,7 +63,7 @@ class GridFactory:
             raise ValueError("codebook size exceeds the declared bit capacity")
         return Grid(lambda x: snap(x, values), precision, values=values, name="values")
 
-    def vector(self, codebook: Tensor, *, bits: int | None = None) -> Grid:
+    def vector(self, codebook: Tensor, *, bits: builtins.int | None = None) -> Grid:
         codebook = torch.as_tensor(codebook, dtype=torch.float32)
         if codebook.ndim != 2 or min(codebook.shape) < 1 or not torch.isfinite(codebook).all():
             raise ValueError("a vector codebook must be a nonempty finite matrix")
