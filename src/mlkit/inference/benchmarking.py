@@ -32,13 +32,18 @@ def benchmark(
     *,
     warmup: int = 10,
     repetitions: int = 50,
+    inference_mode: bool = True,
 ) -> BenchmarkResult:
-    """Synchronize outside each timed interval; exclude warmup and compilation."""
+    """Synchronize outside each timed interval; exclude warmup and compilation.
+
+    Operations that train parameters, such as conversion with block passes, need
+    ``inference_mode=False``.
+    """
     selected_device = torch.device("cuda", torch.cuda.current_device())
     if warmup < 0 or repetitions < 1:
         raise ValueError("warmup must be nonnegative and repetitions must be positive")
     samples = []
-    with torch.inference_mode():
+    with torch.inference_mode(inference_mode):
         for _ in range(warmup):
             operation()
         synchronize(selected_device)
@@ -52,9 +57,12 @@ def benchmark(
     ordered = sorted(samples)
     memory = torch.cuda.max_memory_allocated(selected_device)
     return BenchmarkResult(
-        statistics.median(samples), min(samples),
-        ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))],
-        repetitions, str(selected_device), memory,
+        median_ms=statistics.median(samples),
+        minimum_ms=min(samples),
+        percentile_95_ms=ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))],
+        repetitions=repetitions,
+        device=str(selected_device),
+        peak_memory_bytes=memory,
     )
 
 

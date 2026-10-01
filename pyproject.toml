@@ -44,7 +44,8 @@ target-version = "py311"
 select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.mypy]
-python_version = "3.11"
+# NumPy's type stubs use syntax that requires Python 3.12; Ruff enforces the 3.11 runtime target.
+python_version = "3.12"
 files = ["src/mlkit"]
 check_untyped_defs = true
 ignore_missing_imports = true

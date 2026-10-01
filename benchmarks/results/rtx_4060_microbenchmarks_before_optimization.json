@@ -1,0 +1,1263 @@
+{
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "torch": "2.14.1+cu130",
+  "cuda": "13.0",
+  "triton": "3.8.0",
+  "measurement_date": "2026-10-01",
+  "cold_kernel_cache": false,
+  "commit": "f532aa8",
+  "description": "Measurements before kernel, calibration and inference optimization.",
+  "measurements": [
+    {
+      "case": "operations/kmeans/scalar-1m-k16-10iters",
+      "median_ms": 53.95873299949017,
+      "minimum_ms": 53.51184200026182,
+      "percentile_95_ms": 57.766410000112955,
+      "first_call_ms": 194.43971199962107,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 80695296,
+      "parameters": {},
+      "elements_per_second": 185326812.62353742
+    },
+    {
+      "case": "operations/kmeans/vector8-262k-k256-5iters",
+      "median_ms": 175.83393099994282,
+      "minimum_ms": 174.94515899943508,
+      "percentile_95_ms": 179.21540600036678,
+      "first_call_ms": 249.30543200025568,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 32656384,
+      "parameters": {},
+      "elements_per_second": 7454306.415980806
+    },
+    {
+      "case": "operations/nearest/1m-vectors-256-codewords",
+      "median_ms": 133.58245400013402,
+      "minimum_ms": 132.9470479995507,
+      "percentile_95_ms": 134.12896299996646,
+      "first_call_ms": 136.68056499955128,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 16600576,
+      "parameters": {},
+      "elements_per_second": 7486013.095694414
+    },
+    {
+      "case": "operations/nearest/65k-vectors-65k-codewords",
+      "median_ms": 336.3775630004966,
+      "minimum_ms": 335.9987599997112,
+      "percentile_95_ms": 336.60808700005873,
+      "first_call_ms": 336.2425589994018,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 67650560,
+      "parameters": {},
+      "elements_per_second": 194828.6901641631
+    },
+    {
+      "case": "operations/snap/2048x8192-16-values",
+      "median_ms": 12.574573500387487,
+      "minimum_ms": 12.434835000021849,
+      "percentile_95_ms": 13.185598999370995,
+      "first_call_ms": 12.771358999998483,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 486539776,
+      "parameters": {},
+      "elements_per_second": 1334217498.4688752
+    },
+    {
+      "case": "operations/structured_transform/2048x8192",
+      "median_ms": 21.60055200010902,
+      "minimum_ms": 21.554320999712218,
+      "percentile_95_ms": 22.007021999343124,
+      "first_call_ms": 22.091722000368463,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 201326592,
+      "parameters": {},
+      "elements_per_second": 776703113.8794659
+    },
+    {
+      "case": "operations/structured_transform/4864x896",
+      "median_ms": 2.2101605004536395,
+      "minimum_ms": 2.204069000072195,
+      "percentile_95_ms": 2.3067710008035647,
+      "first_call_ms": 10.067669999443751,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 52301312,
+      "parameters": {},
+      "elements_per_second": 1971867653.5507185
+    },
+    {
+      "case": "operations/structured_transform/896x4864",
+      "median_ms": 1.8705510005929682,
+      "minimum_ms": 1.8567739998616162,
+      "percentile_95_ms": 1.9651889997476246,
+      "first_call_ms": 2.6409510001030867,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 52321280,
+      "parameters": {},
+      "elements_per_second": 2329871785.7029614
+    },
+    {
+      "case": "operations/rht/2048x8192",
+      "median_ms": 22.343926500070665,
+      "minimum_ms": 22.193243999936385,
+      "percentile_95_ms": 23.047871999551717,
+      "first_call_ms": 22.576594999918598,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 268468224,
+      "parameters": {},
+      "elements_per_second": 750862477.1007433
+    },
+    {
+      "case": "operations/pack/4bit-2048x8192",
+      "median_ms": 3.417723499751446,
+      "minimum_ms": 3.29413100007514,
+      "percentile_95_ms": 3.74234399987472,
+      "first_call_ms": 10.448386000462051,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 176160768,
+      "parameters": {},
+      "elements_per_second": 4908886280.946988
+    },
+    {
+      "case": "operations/pack/3bit-2048x8192",
+      "median_ms": 5.221478500516241,
+      "minimum_ms": 5.137250000188942,
+      "percentile_95_ms": 5.669291000231169,
+      "first_call_ms": 5.468474000736023,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 98566144,
+      "parameters": {},
+      "elements_per_second": 3213115978.231311
+    },
+    {
+      "case": "operations/unpack/4bit-2048x8192",
+      "median_ms": 16.06758849993639,
+      "minimum_ms": 16.03908000015508,
+      "percentile_95_ms": 16.425365999566566,
+      "first_call_ms": 32.13042700008373,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 771752448,
+      "parameters": {},
+      "elements_per_second": 1044165152.7275805
+    },
+    {
+      "case": "operations/unpack/3bit-2048x8192",
+      "median_ms": 16.017418500268832,
+      "minimum_ms": 15.88607099984074,
+      "percentile_95_ms": 16.44510400001309,
+      "first_call_ms": 16.130390999933297,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 763363840,
+      "parameters": {},
+      "elements_per_second": 1047435702.5583377
+    },
+    {
+      "case": "operations/proxy_loss/2048x8192",
+      "median_ms": 38.91043849989728,
+      "minimum_ms": 38.41493599975365,
+      "percentile_95_ms": 39.46192700004758,
+      "first_call_ms": 38.84386399931827,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 201326592,
+      "parameters": {},
+      "elements_per_second": 431175197.37137604
+    },
+    {
+      "case": "formats/int4-g128/2048x8192",
+      "median_ms": 9.73960250030359,
+      "minimum_ms": 9.663718999945559,
+      "percentile_95_ms": 10.070896000797802,
+      "first_call_ms": 21.176630000809382,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 352911872,
+      "parameters": {},
+      "elements_per_second": 1722577076.3721664
+    },
+    {
+      "case": "formats/int4-row/2048x8192",
+      "median_ms": 9.710943500067515,
+      "minimum_ms": 9.634764999645995,
+      "percentile_95_ms": 10.1309890005723,
+      "first_call_ms": 9.8800570003732,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 352395776,
+      "parameters": {},
+      "elements_per_second": 1727660757.1533453
+    },
+    {
+      "case": "formats/int3-g128/2048x8192",
+      "median_ms": 9.72054100020614,
+      "minimum_ms": 9.669019000284607,
+      "percentile_95_ms": 9.891167000205314,
+      "first_call_ms": 9.800165999877208,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 352911872,
+      "parameters": {},
+      "elements_per_second": 1725954964.8156633
+    },
+    {
+      "case": "formats/int8-g128/2048x8192",
+      "median_ms": 9.741384999870206,
+      "minimum_ms": 9.665783999480482,
+      "percentile_95_ms": 10.122443000000203,
+      "first_call_ms": 10.111262000464194,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 352912384,
+      "parameters": {},
+      "elements_per_second": 1722261875.5160112
+    },
+    {
+      "case": "formats/int4-asymmetric-g128/2048x8192",
+      "median_ms": 11.755968000215944,
+      "minimum_ms": 11.658714000077453,
+      "percentile_95_ms": 11.97750399933284,
+      "first_call_ms": 19.282654000562616,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 420545024,
+      "parameters": {},
+      "elements_per_second": 1427123313.0008368
+    },
+    {
+      "case": "formats/int4-mse-g128/2048x8192",
+      "median_ms": 97.7004760006821,
+      "minimum_ms": 97.55750600015745,
+      "percentile_95_ms": 98.01678199983144,
+      "first_call_ms": 98.43902700049512,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 352911872,
+      "parameters": {},
+      "elements_per_second": 171720923.85591725
+    },
+    {
+      "case": "formats/nf4-g64/2048x8192",
+      "median_ms": 21.104218500568095,
+      "minimum_ms": 21.051173000159906,
+      "percentile_95_ms": 21.77081799982261,
+      "first_call_ms": 21.25270200031082,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 621871616,
+      "parameters": {},
+      "elements_per_second": 794969782.9155996
+    },
+    {
+      "case": "formats/mxfp4-g32/2048x8192",
+      "median_ms": 21.364257999721303,
+      "minimum_ms": 21.248695000394946,
+      "percentile_95_ms": 21.575100000518432,
+      "first_call_ms": 25.10985300068569,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 622920192,
+      "parameters": {},
+      "elements_per_second": 785293643.2530847
+    },
+    {
+      "case": "formats/fp8-e4m3-g128/2048x8192",
+      "median_ms": 21.098036999774195,
+      "minimum_ms": 21.009625000260712,
+      "percentile_95_ms": 21.45937099976436,
+      "first_call_ms": 21.37038399996527,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 621347840,
+      "parameters": {},
+      "elements_per_second": 795202700.6199468
+    },
+    {
+      "case": "formats/vector8-256-row/2048x2048",
+      "median_ms": 71.43178200021794,
+      "minimum_ms": 71.12957299978007,
+      "percentile_95_ms": 72.27756399970531,
+      "first_call_ms": 72.5794420004604,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 52469760,
+      "parameters": {},
+      "elements_per_second": 58717616.760382704
+    },
+    {
+      "case": "formats/e8p-row/2048x8192",
+      "median_ms": 51.80497000037576,
+      "minimum_ms": 51.36390899951948,
+      "percentile_95_ms": 52.921991999937745,
+      "first_call_ms": 566.0134170002493,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 211959808,
+      "parameters": {},
+      "elements_per_second": 323853406.34071034
+    },
+    {
+      "case": "formats/trellis-l8-tile16/2048x2048",
+      "median_ms": 32.41957200043544,
+      "minimum_ms": 32.33693599941034,
+      "percentile_95_ms": 32.77076300037152,
+      "first_call_ms": 146.3888099997348,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 25222656,
+      "parameters": {},
+      "elements_per_second": 129375674.66787238
+    },
+    {
+      "case": "formats/trellis-l12-tile16/512x2048",
+      "median_ms": 17.990421999456885,
+      "minimum_ms": 17.97911199992086,
+      "percentile_95_ms": 18.282280999301292,
+      "first_call_ms": 293.8352199998917,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 13707776,
+      "parameters": {},
+      "elements_per_second": 58285236.44590747
+    },
+    {
+      "case": "kernels/activation_reconstruction/int4-row-4096x2048",
+      "median_ms": 0.06562850012414856,
+      "minimum_ms": 0.05188699924474349,
+      "percentile_95_ms": 0.08252600036939839,
+      "first_call_ms": 81.90312199985783,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 16777728,
+      "parameters": {},
+      "elements_per_second": 127819590332.42238
+    },
+    {
+      "case": "kernels/activation_reconstruction/int4-g64-4096x2048",
+      "median_ms": 0.2407689999017748,
+      "minimum_ms": 0.23757700000714976,
+      "percentile_95_ms": 0.24890899931051536,
+      "first_call_ms": 63.26483000066219,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 16777728,
+      "parameters": {},
+      "elements_per_second": 34840897305.80869
+    },
+    {
+      "case": "kernels/activation_reconstruction/nf4-g64-4096x2048",
+      "median_ms": 0.3696654998748272,
+      "minimum_ms": 0.36562799959938275,
+      "percentile_95_ms": 0.37698000051022973,
+      "first_call_ms": 56.373118000010436,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 16777728,
+      "parameters": {},
+      "elements_per_second": 22692428703.35607
+    },
+    {
+      "case": "kernels/activation_reconstruction/int4-row-1x2048",
+      "median_ms": 0.02947550046883407,
+      "minimum_ms": 0.02827400021487847,
+      "percentile_95_ms": 0.03936399934900692,
+      "first_call_ms": 0.18272400029673008,
+      "repetitions": 50,
+      "additional_peak_memory_bytes": 4608,
+      "parameters": {},
+      "elements_per_second": 69481432.62793632
+    },
+    {
+      "case": "kernels/lattice_search/e8p-2m-vectors",
+      "median_ms": 43.59008250048646,
+      "minimum_ms": 42.90588000003481,
+      "percentile_95_ms": 43.91910699996515,
+      "first_call_ms": 43.553489000260015,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 8388608,
+      "parameters": {},
+      "elements_per_second": 48110760.05595071
+    },
+    {
+      "case": "kernels/lattice_search/e8p-torch-reference-65k-vectors",
+      "median_ms": 108.48113799966086,
+      "minimum_ms": 108.16306000015175,
+      "percentile_95_ms": 108.87924799953907,
+      "first_call_ms": 109.72170300010475,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 11271680,
+      "parameters": {},
+      "elements_per_second": 604123.4560076691
+    },
+    {
+      "case": "kernels/viterbi_search/l8-4096-sequences-256",
+      "median_ms": 5.450890000247455,
+      "minimum_ms": 5.442143999971449,
+      "percentile_95_ms": 5.538154000532813,
+      "first_call_ms": 5.698394999853917,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 71303168,
+      "parameters": {},
+      "elements_per_second": 192367851.84665215
+    },
+    {
+      "case": "kernels/viterbi_search/l12-512-sequences-256",
+      "median_ms": 1.0401680001450586,
+      "minimum_ms": 1.0382139998910134,
+      "percentile_95_ms": 1.0419010004625306,
+      "first_call_ms": 1.309324999965611,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 134742016,
+      "parameters": {},
+      "elements_per_second": 126010413.68482889
+    },
+    {
+      "case": "kernels/viterbi_search/l8-torch-reference-256-sequences-256",
+      "median_ms": 26.448443000845145,
+      "minimum_ms": 26.196438000624767,
+      "percentile_95_ms": 26.5364890001365,
+      "first_call_ms": 39.13751600066462,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 5423104,
+      "parameters": {},
+      "elements_per_second": 2477877.4311178103
+    },
+    {
+      "case": "kernels/trellis_decode/l8-2048x2048",
+      "median_ms": 0.12440900036381208,
+      "minimum_ms": 0.11993499992968282,
+      "percentile_95_ms": 0.12908299959235592,
+      "first_call_ms": 0.26574999992590165,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 16777216,
+      "parameters": {},
+      "elements_per_second": 33713830894.344467
+    },
+    {
+      "case": "kernels/scalar_decode/int4-g128-2048x8192",
+      "median_ms": 2.761031999853003,
+      "minimum_ms": 2.6993309993486037,
+      "percentile_95_ms": 3.0184209999788436,
+      "first_call_ms": 2.697427000384778,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 201392128,
+      "parameters": {},
+      "elements_per_second": 6076429393.391027
+    },
+    {
+      "case": "algorithms/gptq-int4/llama-attention-2048x2048",
+      "median_ms": 21.00191299996368,
+      "minimum_ms": 20.95690900023328,
+      "percentile_95_ms": 21.73856999979762,
+      "first_call_ms": 485.545534999801,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 71576576,
+      "parameters": {},
+      "elements_per_second": 199710569.2232538
+    },
+    {
+      "case": "algorithms/gptq-int4/llama-key_value-512x2048",
+      "median_ms": 16.118782000376086,
+      "minimum_ms": 16.079476999948383,
+      "percentile_95_ms": 16.63567499963392,
+      "first_call_ms": 31.2219309998909,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 54529024,
+      "parameters": {},
+      "elements_per_second": 65053054.25531125
+    },
+    {
+      "case": "algorithms/gptq-int4/llama-expansion-8192x2048",
+      "median_ms": 37.55077400001028,
+      "minimum_ms": 37.20426300060353,
+      "percentile_95_ms": 37.83569099960005,
+      "first_call_ms": 53.05132200010121,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 235965440,
+      "parameters": {},
+      "elements_per_second": 446787488.32168967
+    },
+    {
+      "case": "algorithms/gptq-int4/llama-contraction-2048x8192",
+      "median_ms": 385.01859699954366,
+      "minimum_ms": 377.30310299957637,
+      "percentile_95_ms": 386.0038419998091,
+      "first_call_ms": 447.13427199985745,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 872424448,
+      "parameters": {},
+      "elements_per_second": 43575079.56951982
+    },
+    {
+      "case": "algorithms/gptq-int4/qwen-attention-896x896",
+      "median_ms": 5.181984000046214,
+      "minimum_ms": 5.154503000085242,
+      "percentile_95_ms": 5.200388999583083,
+      "first_call_ms": 12.344437000137987,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 13768192,
+      "parameters": {},
+      "elements_per_second": 154924445.92512065
+    },
+    {
+      "case": "algorithms/gptq-int4/qwen-key_value-128x896",
+      "median_ms": 4.8636250003255554,
+      "minimum_ms": 4.83169499966607,
+      "percentile_95_ms": 4.890866000096139,
+      "first_call_ms": 12.57639300001756,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 10094592,
+      "parameters": {},
+      "elements_per_second": 23580765.374041617
+    },
+    {
+      "case": "algorithms/gptq-int4/qwen-expansion-4864x896",
+      "median_ms": 8.081713000137825,
+      "minimum_ms": 8.022331000574923,
+      "percentile_95_ms": 8.592363999923691,
+      "first_call_ms": 14.927709999938088,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 60511232,
+      "parameters": {},
+      "elements_per_second": 539259931.6414325
+    },
+    {
+      "case": "algorithms/gptq-int4/qwen-contraction-896x4864",
+      "median_ms": 100.61371299980237,
+      "minimum_ms": 96.84473800007254,
+      "percentile_95_ms": 102.90227000041341,
+      "first_call_ms": 134.1893839999102,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 301340672,
+      "parameters": {},
+      "elements_per_second": 43315606.492015265
+    },
+    {
+      "case": "algorithms/gptq-int4-torch-reference/llama-key_value-512x2048",
+      "median_ms": 449.05264299995906,
+      "minimum_ms": 447.60820499959664,
+      "percentile_95_ms": 449.4386009992013,
+      "first_call_ms": 449.9431599997479,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 54529024,
+      "parameters": {},
+      "elements_per_second": 2335084.797619364
+    },
+    {
+      "case": "algorithms/gptq-int4-activation-order/llama-attention-2048x2048",
+      "median_ms": 21.05258900064655,
+      "minimum_ms": 21.045274999778485,
+      "percentile_95_ms": 21.50430899928324,
+      "first_call_ms": 33.78240199981519,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 89558528,
+      "parameters": {},
+      "elements_per_second": 199229842.93623877
+    },
+    {
+      "case": "algorithms/gptq-int4-activation-order/llama-contraction-2048x8192",
+      "median_ms": 395.7839029999377,
+      "minimum_ms": 389.59440199960227,
+      "percentile_95_ms": 400.6021330005751,
+      "first_call_ms": 400.3359009993801,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 1140925440,
+      "parameters": {},
+      "elements_per_second": 42389839.18454774
+    },
+    {
+      "case": "algorithms/gptq-int4-whole-row-refit/llama-attention-2048x2048",
+      "median_ms": 16.083194999737316,
+      "minimum_ms": 16.021427999476145,
+      "percentile_95_ms": 16.795305000414373,
+      "first_call_ms": 27.916869999899063,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 138439680,
+      "parameters": {},
+      "elements_per_second": 260787983.98381072
+    },
+    {
+      "case": "algorithms/gptq-nf4/llama-attention-2048x2048",
+      "median_ms": 22.637081000539183,
+      "minimum_ms": 22.594801999730407,
+      "percentile_95_ms": 22.990626999671804,
+      "first_call_ms": 44.55399699963891,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 71584768,
+      "parameters": {},
+      "elements_per_second": 185284666.33573902
+    },
+    {
+      "case": "algorithms/gptq-int4-asymmetric/llama-attention-2048x2048",
+      "median_ms": 21.020498999860138,
+      "minimum_ms": 20.83915699950012,
+      "percentile_95_ms": 21.54374400015513,
+      "first_call_ms": 51.09284599984676,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 71584768,
+      "parameters": {},
+      "elements_per_second": 199533988.22872412
+    },
+    {
+      "case": "algorithms/gptq-int3/llama-attention-2048x2048",
+      "median_ms": 19.431036999776552,
+      "minimum_ms": 19.276895999610133,
+      "percentile_95_ms": 20.091199000489723,
+      "first_call_ms": 34.919891999379615,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 71576576,
+      "parameters": {},
+      "elements_per_second": 215855901.0539804
+    },
+    {
+      "case": "algorithms/ldlq-e8p-step8/llama-attention-2048x2048",
+      "median_ms": 79.60861299943645,
+      "minimum_ms": 79.43878399964888,
+      "percentile_95_ms": 79.6766209996349,
+      "first_call_ms": 94.80043000075966,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 86002176,
+      "parameters": {},
+      "elements_per_second": 52686560.43573692
+    },
+    {
+      "case": "algorithms/ldlq-trellis-l8-step16/llama-key_value-512x2048",
+      "median_ms": 44.2075749997457,
+      "minimum_ms": 44.08974299985857,
+      "percentile_95_ms": 44.21229400031734,
+      "first_call_ms": 82.05411699964316,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 54535168,
+      "parameters": {},
+      "elements_per_second": 23719373.88572053
+    },
+    {
+      "case": "algorithms/awq-int4-grid20/llama-attention-2048x2048",
+      "median_ms": 94.7142779996284,
+      "minimum_ms": 94.56622900052025,
+      "percentile_95_ms": 95.05589099990175,
+      "first_call_ms": 95.52442299991526,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 147244544,
+      "parameters": {},
+      "elements_per_second": 44283756.24651287
+    },
+    {
+      "case": "algorithms/awq-gptq-int4-grid10/llama-key_value-512x2048",
+      "median_ms": 171.52947199974733,
+      "minimum_ms": 171.41159099992365,
+      "percentile_95_ms": 172.60971600080666,
+      "first_call_ms": 172.28189900015423,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 81891328,
+      "parameters": {},
+      "elements_per_second": 6113095.2469879035
+    },
+    {
+      "case": "algorithms/incoherent-gptq-int4/llama-attention-2048x2048",
+      "median_ms": 33.7722220001524,
+      "minimum_ms": 33.513925999614,
+      "percentile_95_ms": 33.96622699983709,
+      "first_call_ms": 40.732754000600835,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 117456896,
+      "parameters": {},
+      "elements_per_second": 124193901.12919053
+    },
+    {
+      "case": "algorithms/incoherent-gptq-int4/qwen-contraction-896x4864",
+      "median_ms": 147.10019700032717,
+      "minimum_ms": 143.58754600016255,
+      "percentile_95_ms": 147.34131200020784,
+      "first_call_ms": 145.96690400048828,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 508081664,
+      "parameters": {},
+      "elements_per_second": 29627043.939243037
+    },
+    {
+      "case": "algorithms/best-of-int4-nf4/llama-attention-2048x2048",
+      "median_ms": 11.567013999410847,
+      "minimum_ms": 11.531916999956593,
+      "percentile_95_ms": 12.184305000118911,
+      "first_call_ms": 11.597391000577773,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 176571392,
+      "parameters": {},
+      "elements_per_second": 362609053.6601436
+    },
+    {
+      "case": "calibration/hessian/2048-rows-2048-wide",
+      "median_ms": 3.2353704996239685,
+      "minimum_ms": 3.207658000064839,
+      "percentile_95_ms": 3.31701399954909,
+      "first_call_ms": 4.761102000884421,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 33554432,
+      "parameters": {},
+      "elements_per_second": 1296390629.9100778
+    },
+    {
+      "case": "calibration/hessian/2048-rows-8192-wide",
+      "median_ms": 64.39056200042614,
+      "minimum_ms": 63.09629099996528,
+      "percentile_95_ms": 67.00900599935267,
+      "first_call_ms": 62.38765699981741,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 536870912,
+      "parameters": {},
+      "elements_per_second": 260553961.30707738
+    },
+    {
+      "case": "calibration/activation_absmean/2048-rows-8192-wide",
+      "median_ms": 1.3249690000520786,
+      "minimum_ms": 1.3180410005588783,
+      "percentile_95_ms": 1.3923309998062905,
+      "first_call_ms": 1.5474430001631845,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 155222528,
+      "parameters": {},
+      "elements_per_second": 12662346061.938477
+    },
+    {
+      "case": "calibration/input_sample/2048-rows-8192-wide",
+      "median_ms": 17.320218000349996,
+      "minimum_ms": 17.12723999935406,
+      "percentile_95_ms": 18.171165000239853,
+      "first_call_ms": 17.887711000184936,
+      "repetitions": 10,
+      "additional_peak_memory_bytes": 67108864,
+      "parameters": {},
+      "elements_per_second": 968649239.8456519
+    },
+    {
+      "case": "calibration/quantize/rtn-int4-4-blocks",
+      "median_ms": 25.859657999717456,
+      "minimum_ms": 25.55830999972386,
+      "percentile_95_ms": 26.598798999657447,
+      "first_call_ms": 33.447861000240664,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 188908032,
+      "parameters": {},
+      "elements_per_second": 1297559000.9878173
+    },
+    {
+      "case": "calibration/quantize/gptq-int4-4-blocks",
+      "median_ms": 689.7739350006304,
+      "minimum_ms": 684.9337029998424,
+      "percentile_95_ms": 692.6340689997232,
+      "first_call_ms": 838.0834279996634,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 385881088,
+      "parameters": {},
+      "elements_per_second": 48645549.35664441
+    },
+    {
+      "case": "calibration/quantize/gptq-int4-4-blocks-nonsequential",
+      "median_ms": 668.282771000122,
+      "minimum_ms": 665.2053379993959,
+      "percentile_95_ms": 674.7804619999442,
+      "first_call_ms": 678.8806300000942,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 385881088,
+      "parameters": {},
+      "elements_per_second": 50209931.26874114
+    },
+    {
+      "case": "calibration/quantize/awq-int4-4-blocks",
+      "median_ms": 869.9642539995693,
+      "minimum_ms": 865.3497680006694,
+      "percentile_95_ms": 871.0182079994411,
+      "first_call_ms": 850.2390520006884,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 394609664,
+      "parameters": {},
+      "elements_per_second": 38569897.37881415
+    },
+    {
+      "case": "calibration/quantize/gptq-int4-finetune-4-blocks",
+      "median_ms": 1182.810600999801,
+      "minimum_ms": 1174.1906639999797,
+      "percentile_95_ms": 1183.007292000184,
+      "first_call_ms": 2639.427438999519,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 486938112,
+      "parameters": {},
+      "elements_per_second": 28368389.640435465
+    },
+    {
+      "case": "checkpoints/save/int4-g128-4x2048x2048",
+      "median_ms": 32.52565399998275,
+      "minimum_ms": 32.02140499979578,
+      "percentile_95_ms": 32.8907610000897,
+      "first_call_ms": 35.982641000373405,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 0,
+      "parameters": {},
+      "elements_per_second": 515814870.3177159
+    },
+    {
+      "case": "checkpoints/load/int4-g128-4x2048x2048",
+      "median_ms": 273.85898400007136,
+      "minimum_ms": 269.77802099918335,
+      "percentile_95_ms": 275.5452069995954,
+      "first_call_ms": 275.3889830000844,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 88228352,
+      "parameters": {},
+      "elements_per_second": 61262244.36732603
+    },
+    {
+      "case": "checkpoints/save/int3-g128-4x2048x2048",
+      "median_ms": 31.50497299975541,
+      "minimum_ms": 29.940106999674754,
+      "percentile_95_ms": 31.759572000737535,
+      "first_call_ms": 33.314899999822956,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 0,
+      "parameters": {},
+      "elements_per_second": 532525960.2707881
+    },
+    {
+      "case": "checkpoints/load/int3-g128-4x2048x2048",
+      "median_ms": 272.86176699999487,
+      "minimum_ms": 271.10712400008197,
+      "percentile_95_ms": 273.9780379997683,
+      "first_call_ms": 267.88746399961383,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 88228352,
+      "parameters": {},
+      "elements_per_second": 61486137.044624195
+    },
+    {
+      "case": "inference/linear-int4/dense-llama-attention-2048x2048-batch1",
+      "median_ms": 0.027952999971603276,
+      "minimum_ms": 0.0274519998129108,
+      "percentile_95_ms": 0.03016600021510385,
+      "first_call_ms": 7.763062999401882,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 4096,
+      "parameters": {
+        "batch": 1,
+        "backend": "dense"
+      },
+      "elements_per_second": 150048438602.6861
+    },
+    {
+      "case": "inference/linear-int4/packed-llama-attention-2048x2048-batch1",
+      "median_ms": 0.06170599999677506,
+      "minimum_ms": 0.05991200032440247,
+      "percentile_95_ms": 0.0695610006005154,
+      "first_call_ms": 2117.7598840004066,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 4096,
+      "parameters": {
+        "batch": 1,
+        "backend": "packed"
+      },
+      "elements_per_second": 67972385184.896225
+    },
+    {
+      "case": "inference/linear-int4/dense-llama-attention-2048x2048-batch4",
+      "median_ms": 0.027341499844624195,
+      "minimum_ms": 0.02661100006662309,
+      "percentile_95_ms": 0.03136899977107532,
+      "first_call_ms": 0.4080680000697612,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 16384,
+      "parameters": {
+        "batch": 4,
+        "backend": "dense"
+      },
+      "elements_per_second": 153404312998.01834
+    },
+    {
+      "case": "inference/linear-int4/packed-llama-attention-2048x2048-batch4",
+      "median_ms": 0.0716549998287519,
+      "minimum_ms": 0.07049200030451175,
+      "percentile_95_ms": 0.0770050000937772,
+      "first_call_ms": 7.893598999544338,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 8404992,
+      "parameters": {
+        "batch": 4,
+        "backend": "packed"
+      },
+      "elements_per_second": 58534701137.72879
+    },
+    {
+      "case": "inference/linear-int4/dense-llama-attention-2048x2048-batch128",
+      "median_ms": 0.061460500091925496,
+      "minimum_ms": 0.060753999605367426,
+      "percentile_95_ms": 0.06640499941568123,
+      "first_call_ms": 3.560803000254964,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 524288,
+      "parameters": {
+        "batch": 128,
+        "backend": "dense"
+      },
+      "elements_per_second": 68243896384.28984
+    },
+    {
+      "case": "inference/linear-int4/packed-llama-attention-2048x2048-batch128",
+      "median_ms": 0.10819350018209661,
+      "minimum_ms": 0.10661099986464251,
+      "percentile_95_ms": 0.1174709996121237,
+      "first_call_ms": 0.26556000011623837,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 8912896,
+      "parameters": {
+        "batch": 128,
+        "backend": "packed"
+      },
+      "elements_per_second": 38766691094.5733
+    },
+    {
+      "case": "inference/linear-int4/dense-llama-key_value-512x2048-batch1",
+      "median_ms": 0.01874049985417514,
+      "minimum_ms": 0.01817399970605038,
+      "percentile_95_ms": 0.024105000193230808,
+      "first_call_ms": 0.14353000005939975,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 1024,
+      "parameters": {
+        "batch": 1,
+        "backend": "dense"
+      },
+      "elements_per_second": 55952402986.00631
+    },
+    {
+      "case": "inference/linear-int4/packed-llama-key_value-512x2048-batch1",
+      "median_ms": 0.05282949996399111,
+      "minimum_ms": 0.050734999604173936,
+      "percentile_95_ms": 0.06523299998661969,
+      "first_call_ms": 2117.9580110001552,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 1024,
+      "parameters": {
+        "batch": 1,
+        "backend": "packed"
+      },
+      "elements_per_second": 19848304464.640312
+    },
+    {
+      "case": "inference/linear-int4/dense-llama-key_value-512x2048-batch4",
+      "median_ms": 0.022377500044967746,
+      "minimum_ms": 0.021920999643043615,
+      "percentile_95_ms": 0.02408500040473882,
+      "first_call_ms": 0.20637800025724573,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 4096,
+      "parameters": {
+        "batch": 4,
+        "backend": "dense"
+      },
+      "elements_per_second": 46858496163.23892
+    },
+    {
+      "case": "inference/linear-int4/packed-llama-key_value-512x2048-batch4",
+      "median_ms": 0.06535799957418931,
+      "minimum_ms": 0.063590000536351,
+      "percentile_95_ms": 0.07690499933232786,
+      "first_call_ms": 30.83855900058552,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 2101248,
+      "parameters": {
+        "batch": 4,
+        "backend": "packed"
+      },
+      "elements_per_second": 16043575489.328407
+    },
+    {
+      "case": "inference/linear-int4/dense-llama-key_value-512x2048-batch128",
+      "median_ms": 0.028648999887082027,
+      "minimum_ms": 0.028092999855289236,
+      "percentile_95_ms": 0.03500599996186793,
+      "first_call_ms": 0.1233829998454894,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 131072,
+      "parameters": {
+        "batch": 128,
+        "backend": "dense"
+      },
+      "elements_per_second": 36600789002.50923
+    },
+    {
+      "case": "inference/linear-int4/packed-llama-key_value-512x2048-batch128",
+      "median_ms": 0.07528200012529851,
+      "minimum_ms": 0.06761700024071615,
+      "percentile_95_ms": 0.11448599980212748,
+      "first_call_ms": 0.24474099973303964,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 2228224,
+      "parameters": {
+        "batch": 128,
+        "backend": "packed"
+      },
+      "elements_per_second": 13928641617.581387
+    },
+    {
+      "case": "inference/linear-int4/dense-llama-expansion-8192x2048-batch1",
+      "median_ms": 0.12153350007793051,
+      "minimum_ms": 0.12064700058544986,
+      "percentile_95_ms": 0.12890299967693863,
+      "first_call_ms": 0.21321199983503902,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 16384,
+      "parameters": {
+        "batch": 1,
+        "backend": "dense"
+      },
+      "elements_per_second": 138046020144.58566
+    },
+    {
+      "case": "inference/linear-int4/packed-llama-expansion-8192x2048-batch1",
+      "median_ms": 0.11494650016175001,
+      "minimum_ms": 0.11325299965392333,
+      "percentile_95_ms": 0.12197999967611395,
+      "first_call_ms": 2138.095961000545,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 16384,
+      "parameters": {
+        "batch": 1,
+        "backend": "packed"
+      },
+      "elements_per_second": 145956736189.37067
+    },
+    {
+      "case": "inference/linear-int4/dense-llama-expansion-8192x2048-batch4",
+      "median_ms": 0.05333600029189256,
+      "minimum_ms": 0.05215800047153607,
+      "percentile_95_ms": 0.05648700062010903,
+      "first_call_ms": 0.24339800074812956,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 65536,
+      "parameters": {
+        "batch": 4,
+        "backend": "dense"
+      },
+      "elements_per_second": 314557070424.9125
+    },
+    {
+      "case": "inference/linear-int4/packed-llama-expansion-8192x2048-batch4",
+      "median_ms": 0.2575649996288121,
+      "minimum_ms": 0.25187500068568625,
+      "percentile_95_ms": 0.28375399961078074,
+      "first_call_ms": 6.225878999430279,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 33619968,
+      "parameters": {
+        "batch": 4,
+        "backend": "packed"
+      },
+      "elements_per_second": 65137794437.04837
+    },
+    {
+      "case": "inference/linear-int4/dense-llama-expansion-8192x2048-batch128",
+      "median_ms": 0.17706299968267558,
+      "minimum_ms": 0.17416700029571075,
+      "percentile_95_ms": 0.1979629996640142,
+      "first_call_ms": 0.29038600041531026,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 2097152,
+      "parameters": {
+        "batch": 128,
+        "backend": "dense"
+      },
+      "elements_per_second": 94752805668.4196
+    },
+    {
+      "case": "inference/linear-int4/packed-llama-expansion-8192x2048-batch128",
+      "median_ms": 0.34481900047467207,
+      "minimum_ms": 0.3370439999343944,
+      "percentile_95_ms": 0.39925199962453917,
+      "first_call_ms": 0.4630409994206275,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 35651584,
+      "parameters": {
+        "batch": 128,
+        "backend": "packed"
+      },
+      "elements_per_second": 48655137845.956184
+    },
+    {
+      "case": "inference/linear-int4/dense-llama-contraction-2048x8192-batch1",
+      "median_ms": 0.12217999938002322,
+      "minimum_ms": 0.12107800012017833,
+      "percentile_95_ms": 0.130726000861614,
+      "first_call_ms": 0.21042599928478012,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 4096,
+      "parameters": {
+        "batch": 1,
+        "backend": "dense"
+      },
+      "elements_per_second": 137315567892.71947
+    },
+    {
+      "case": "inference/linear-int4/packed-llama-contraction-2048x8192-batch1",
+      "median_ms": 0.12886300009995466,
+      "minimum_ms": 0.1265579994651489,
+      "percentile_95_ms": 0.14675599959446117,
+      "first_call_ms": 2427.926455000488,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 4096,
+      "parameters": {
+        "batch": 1,
+        "backend": "packed"
+      },
+      "elements_per_second": 130194206149.06126
+    },
+    {
+      "case": "inference/linear-int4/dense-llama-contraction-2048x8192-batch4",
+      "median_ms": 0.06657050016656285,
+      "minimum_ms": 0.06135600051493384,
+      "percentile_95_ms": 0.07031199947959976,
+      "first_call_ms": 0.1903689999380731,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 16384,
+      "parameters": {
+        "batch": 4,
+        "backend": "dense"
+      },
+      "elements_per_second": 252021780789.1263
+    },
+    {
+      "case": "inference/linear-int4/packed-llama-contraction-2048x8192-batch4",
+      "median_ms": 0.2653844999258581,
+      "minimum_ms": 0.2607200003694743,
+      "percentile_95_ms": 0.30864099971950054,
+      "first_call_ms": 5.57609599945863,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 33570816,
+      "parameters": {
+        "batch": 4,
+        "backend": "packed"
+      },
+      "elements_per_second": 63218522576.43962
+    },
+    {
+      "case": "inference/linear-int4/dense-llama-contraction-2048x8192-batch128",
+      "median_ms": 0.18732300031842897,
+      "minimum_ms": 0.18521899983170442,
+      "percentile_95_ms": 0.19515700023475802,
+      "first_call_ms": 0.3242700004193466,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 524288,
+      "parameters": {
+        "batch": 128,
+        "backend": "dense"
+      },
+      "elements_per_second": 89563032684.0833
+    },
+    {
+      "case": "inference/linear-int4/packed-llama-contraction-2048x8192-batch128",
+      "median_ms": 0.33528599988130736,
+      "minimum_ms": 0.33005099976435304,
+      "percentile_95_ms": 0.3658380001070327,
+      "first_call_ms": 0.44895500013808487,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 34078720,
+      "parameters": {
+        "batch": 128,
+        "backend": "packed"
+      },
+      "elements_per_second": 50038522353.86865
+    },
+    {
+      "case": "inference/linear-int4/packed-qwen-attention-896x896-batch1",
+      "median_ms": 0.054847999763296684,
+      "minimum_ms": 0.05099600002722582,
+      "percentile_95_ms": 0.09960700026567793,
+      "first_call_ms": 2008.6392769999293,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 2048,
+      "parameters": {
+        "batch": 1,
+        "backend": "packed"
+      },
+      "elements_per_second": 14637106247.532299
+    },
+    {
+      "case": "inference/linear-int4/packed-qwen-key_value-128x896-batch1",
+      "median_ms": 0.05074599994259188,
+      "minimum_ms": 0.048781999794300646,
+      "percentile_95_ms": 0.0580790001549758,
+      "first_call_ms": 2002.1008019994042,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 512,
+      "parameters": {
+        "batch": 1,
+        "backend": "packed"
+      },
+      "elements_per_second": 2260040202.7695713
+    },
+    {
+      "case": "inference/linear-int4/packed-qwen-expansion-4864x896-batch1",
+      "median_ms": 0.06437200045184,
+      "minimum_ms": 0.06251800004974939,
+      "percentile_95_ms": 0.07215599998744437,
+      "first_call_ms": 2008.2375450001564,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 9728,
+      "parameters": {
+        "batch": 1,
+        "backend": "packed"
+      },
+      "elements_per_second": 67702478863.62568
+    },
+    {
+      "case": "inference/linear-int4/packed-qwen-contraction-896x4864-batch1",
+      "median_ms": 0.07264150008268189,
+      "minimum_ms": 0.0711739994585514,
+      "percentile_95_ms": 0.07899899992480641,
+      "first_call_ms": 2551.9998260006105,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 2048,
+      "parameters": {
+        "batch": 1,
+        "backend": "packed"
+      },
+      "elements_per_second": 59995236814.21062
+    },
+    {
+      "case": "inference/linear-nf4/packed-llama-attention-2048x2048-batch1",
+      "median_ms": 0.07307250007215771,
+      "minimum_ms": 0.07129400000849273,
+      "percentile_95_ms": 0.07990100039023673,
+      "first_call_ms": 2322.4381249992803,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 4096,
+      "parameters": {
+        "batch": 1,
+        "backend": "packed"
+      },
+      "elements_per_second": 57399213053.58656
+    },
+    {
+      "case": "inference/linear-nf4/packed-llama-contraction-2048x8192-batch1",
+      "median_ms": 0.13392250002652872,
+      "minimum_ms": 0.1322190000792034,
+      "percentile_95_ms": 0.1415369997630478,
+      "first_call_ms": 2567.152655999962,
+      "repetitions": 100,
+      "additional_peak_memory_bytes": 4096,
+      "parameters": {
+        "batch": 1,
+        "backend": "packed"
+      },
+      "elements_per_second": 125275558600.5085
+    },
+    {
+      "case": "inference/layer-stack-int4/dense-48-layers-batch1",
+      "median_ms": 4.980289999821252,
+      "minimum_ms": 4.949086000124225,
+      "percentile_95_ms": 5.215938000219467,
+      "first_call_ms": 5.054524000115634,
+      "repetitions": 50,
+      "additional_peak_memory_bytes": 20480,
+      "parameters": {
+        "batch": 1,
+        "backend": "dense"
+      },
+      "elements_per_second": 121274017380.8508
+    },
+    {
+      "case": "inference/layer-stack-int4/packed-48-layers-batch1",
+      "median_ms": 3.330433999963134,
+      "minimum_ms": 3.3069749997594045,
+      "percentile_95_ms": 3.402854999876581,
+      "first_call_ms": 3.433292000408983,
+      "repetitions": 50,
+      "additional_peak_memory_bytes": 20480,
+      "parameters": {
+        "batch": 1,
+        "backend": "packed"
+      },
+      "elements_per_second": 181351672486.73468
+    }
+  ]
+}
