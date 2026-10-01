@@ -10,6 +10,7 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
+from mlkit.calibration.activation_storage import ActivationStorage
 from mlkit.calibration.statistics_cache import StatisticsCache, model_fingerprint
 from mlkit.calibration.token_batches import DataSource, TokenBatches, data, normalize_batches
 from mlkit.models.model import Model
@@ -62,7 +63,40 @@ def forward_batch(model: nn.Module, batch: Any) -> Any:
     return model(batch)
 
 
+class StopForward(Exception):
+    """Ends a model forward inside a hook once the required block inputs are captured."""
+
+
+def equivalent_arguments(left: Any, right: Any) -> bool:
+    """Whether two captured arguments hold the same tensors and equal values."""
+    if isinstance(left, Tensor) or isinstance(right, Tensor):
+        return left is right
+    if isinstance(left, (tuple, list)):
+        return (
+            type(left) is type(right)
+            and len(left) == len(right)
+            and all(
+                equivalent_arguments(first, second)
+                for first, second in zip(left, right, strict=True)
+            )
+        )
+    if isinstance(left, Mapping):
+        return (
+            isinstance(right, Mapping)
+            and left.keys() == right.keys()
+            and all(equivalent_arguments(left[name], right[name]) for name in left)
+        )
+    if left is right:
+        return True
+    try:
+        return bool(left == right)
+    except (RuntimeError, TypeError, ValueError):
+        return False
+
+
 class CalibrationSession:
+    """Captures the inputs of every block once and replays them block by block."""
+
     def __init__(
         self,
         model: Model,
@@ -74,6 +108,7 @@ class CalibrationSession:
         need_targets: bool,
         retain_history: bool = True,
         selected_blocks: tuple[int, ...] | None = None,
+        storage: str = "auto",
     ) -> None:
         if selected_blocks is not None:
             if sequential:
@@ -88,6 +123,7 @@ class CalibrationSession:
         self.need_targets = need_targets
         self.retain_history = retain_history
         self.selected_blocks = selected_blocks
+        self.storage = ActivationStorage(storage)
         self.calls: list[list[BlockCall]] | None = None
         self.targets: list[list[Tensor]] = [[] for _ in model.blocks]
         self.requirements: dict[str, tuple[Callable | None, str]] = {}
@@ -117,25 +153,73 @@ class CalibrationSession:
             self.disk_cache = StatisticsCache(self.cache_dir, identity)
 
     def prepare(self) -> None:
+        """Run the calibration batches once and record the inputs of every block."""
         if self.calls is not None:
             return
         self.prepare_data()
         assert self.batches is not None
         self.calls = [[] for _ in self.model.blocks]
-        handles = []
-        host_tensors: dict[int, tuple[weakref.ReferenceType[Tensor], Tensor]] = {}
+        module = self.model.module
+        training_states = [(submodule, submodule.training) for submodule in module.modules()]
+        module.eval()
+        try:
+            with torch.no_grad():
+                self._capture(self.batches[0], first_block_only=False)
+                first_block_only = self._later_blocks_repeat_first_block_arguments()
+                for batch in self.batches[1:]:
+                    self._capture(batch, first_block_only=first_block_only)
+        finally:
+            for submodule, training in training_states:
+                submodule.training = training
 
-        def transfer_to_host(tensor: Tensor) -> Tensor:
-            stored = host_tensors.get(id(tensor))
+    def _later_blocks_repeat_first_block_arguments(self) -> bool:
+        """Whether one batch showed every block receiving the first block's side inputs.
+
+        Sequential calibration replaces the hidden state of later blocks, so when
+        their remaining arguments are the very tensors given to the first block,
+        the forward pass can end as soon as the first block has been reached.
+        """
+        assert self.calls is not None
+        if not self.sequential or self.need_targets or len(self.calls) < 2:
+            return False
+        if len(self.calls[0]) != 1:
+            return False
+        # Hidden states differ by construction, so both sides receive one placeholder.
+        placeholder = torch.empty(0, device="cpu")
+        reference = self.calls[0][0].with_hidden(placeholder)
+        for calls in self.calls[1:]:
+            if len(calls) != 1:
+                return False
+            candidate = calls[0].with_hidden(placeholder)
+            if not equivalent_arguments(reference.args, candidate.args):
+                return False
+            if not equivalent_arguments(reference.kwargs, candidate.kwargs):
+                return False
+        return True
+
+    def _capture(self, batch: Any, *, first_block_only: bool) -> None:
+        assert self.calls is not None
+        calls = self.calls
+        handles = []
+        stored_tensors: dict[int, tuple[weakref.ReferenceType[Tensor], Tensor]] = {}
+        placeholder = torch.empty(0, device="cpu")
+
+        def store(tensor: Tensor) -> Tensor:
+            """Store each distinct tensor of a batch once, however many blocks receive it."""
+            stored = stored_tensors.get(id(tensor))
             if stored is not None and stored[0]() is tensor:
                 return stored[1]
-            transferred = tensor.detach().cpu()
-            host_tensors[id(tensor)] = weakref.ref(tensor), transferred
-            return transferred
+            if tensor is placeholder:
+                return tensor
+            kept = self.storage.store(tensor, copy=True)
+            stored_tensors[id(tensor)] = weakref.ref(tensor), kept
+            return kept
 
         for index, block in enumerate(self.model.blocks):
             if self.selected_blocks is not None and index not in self.selected_blocks:
                 continue
+            if first_block_only and index > 0:
+                break
 
             def capture_inputs(
                 module: nn.Module,
@@ -143,14 +227,17 @@ class CalibrationSession:
                 keywords: dict,
                 block_index: int = index,
             ) -> None:
-                assert self.calls is not None
                 call = BlockCall(arguments, keywords)
                 if self.sequential and block_index > 0 and not self.need_targets:
-                    call = call.with_hidden(torch.empty(0, device="cpu"))
-                self.calls[block_index].append(BlockCall(
-                    map_tensors(call.args, transfer_to_host),
-                    map_tensors(call.kwargs, transfer_to_host),
-                ))
+                    call = call.with_hidden(placeholder)
+                captured = BlockCall(
+                    map_tensors(call.args, store), map_tensors(call.kwargs, store)
+                )
+                calls[block_index].append(captured)
+                if first_block_only:
+                    for later_calls in calls[1:]:
+                        later_calls.append(captured.with_hidden(placeholder))
+                    raise StopForward
 
             handles.append(block.register_forward_pre_hook(capture_inputs, with_kwargs=True))
             if self.need_targets:
@@ -161,19 +248,14 @@ class CalibrationSession:
                     output: Any,
                     block_index: int = index,
                 ) -> None:
-                    self.targets[block_index].append(transfer_to_host(extract_hidden(output)))
+                    self.targets[block_index].append(store(extract_hidden(output)))
 
                 handles.append(block.register_forward_hook(capture_targets))
         try:
-            training_states = [(module, module.training) for module in self.model.module.modules()]
-            self.model.module.eval()
-            with torch.no_grad():
-                for batch in self.batches:
-                    host_tensors.clear()
-                    forward_batch(self.model.module, batch)
+            forward_batch(self.model.module, batch)
+        except StopForward:
+            pass
         finally:
-            for module, training in training_states:
-                module.training = training
             for handle in handles:
                 handle.remove()
 
@@ -183,11 +265,12 @@ class CalibrationSession:
         return self.calls[index]
 
     def propagate(self, index: int, block: nn.Module) -> None:
+        """Replace the next block's inputs with the outputs of the converted block."""
         if not self.sequential or self.calls is None or index + 1 >= len(self.model.blocks):
             return
         with torch.no_grad():
             for sample, call in enumerate(self.calls[index]):
-                hidden = extract_hidden(call.run(block)).detach().cpu()
+                hidden = self.storage.store(extract_hidden(call.run(block)), copy=False)
                 self.calls[index + 1][sample] = self.calls[index + 1][sample].with_hidden(hidden)
 
     def release(self, index: int) -> None:
