@@ -50,7 +50,7 @@ class PackedLinear(nn.Module):
         self.register_buffer("packed", pack(quantized.codes, 4).to(device))
         scale_dtype = {
             "fp16": torch.float16, "bf16": torch.bfloat16,
-        }.get(quantized.metadata.get("scale_fmt"), quantized.params["scales"].dtype)
+        }.get(str(quantized.metadata.get("scale_fmt")), quantized.params["scales"].dtype)
         self.register_buffer(
             "scales", quantized.params["scales"].to(device=device, dtype=scale_dtype).contiguous()
         )

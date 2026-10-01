@@ -97,3 +97,21 @@ def test_activation_quantization_hooks() -> None:
 def test_missing_calibration_is_actionable() -> None:
     with pytest.raises(ValueError, match="calibration"):
         mk.quantize(RepeatedModel(), mk.gptq(mk.int(4, group=8)), calib=None)
+
+
+def test_cached_statistics_skip_model_calibration_forward(tmp_path) -> None:
+    model = RepeatedModel()
+    calls = []
+    model.register_forward_hook(lambda *arguments: calls.append(True))
+    calibration = [torch.randn(4, 16)]
+
+    @mk.quantizer
+    def record(values, context):
+        _ = context.H
+        return mk.Q(values, bits=32 * values.numel())
+
+    mk.quantize(model, record, calib=calibration, sequential=False, cache_dir=tmp_path)
+    assert calls
+    calls.clear()
+    mk.quantize(model, record, calib=calibration, sequential=False, cache_dir=tmp_path)
+    assert not calls

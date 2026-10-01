@@ -97,8 +97,8 @@ class CalibrationSession:
         self.disk_cache: StatisticsCache | None = None
         self.batches: list[Any] | None = None
 
-    def prepare(self) -> None:
-        if self.calls is not None:
+    def prepare_data(self) -> None:
+        if self.batches is not None:
             return
         calibration = self.calibration
         if isinstance(calibration, str):
@@ -118,6 +118,12 @@ class CalibrationSession:
                 (model_fingerprint(self.model.module) + token_batches.fingerprint).encode()
             ).hexdigest()
             self.disk_cache = StatisticsCache(self.cache_dir, identity)
+
+    def prepare(self) -> None:
+        if self.calls is not None:
+            return
+        self.prepare_data()
+        assert self.batches is not None
         self.calls = [[] for _ in self.model.blocks]
         handles = []
         for index, block in enumerate(self.model.blocks):
@@ -185,43 +191,69 @@ class BlockStatistics:
         self.values: dict[tuple[str, str], Tensor] = {}
 
     def collect(self, statistic: str, function: Callable | None, reduction: str) -> None:
+        self.collect_many({statistic: (function, reduction)})
+
+    def collect_many(self, requirements: dict[str, tuple[Callable | None, str]]) -> None:
         session = self.session
-        session.requirements[statistic] = (function, reduction)
-        calls = session.block_calls(self.index)
-        accumulators = {}
+        session.requirements.update(requirements)
+        if not requirements:
+            return
+        session.prepare_data()
+        layers = [(name, module) for name, module in self.block.named_modules()
+                  if isinstance(module, nn.Linear)]
+        siblings = identify_siblings(layers, self.prefix)
+        modules = {f"{self.prefix}.{name}".strip("."): module for name, module in layers}
+        aliases = {
+            name: names[0] for name, names in siblings.items()
+            if not any(modules[sibling]._forward_pre_hooks for sibling in names)
+        }
+        accumulators: dict[tuple[str, str], StatisticAccumulator] = {}
         handles = []
-        for relative_name, module in self.block.named_modules():
-            if not isinstance(module, nn.Linear):
+        for name, module in modules.items():
+            if aliases.get(name, name) != name:
                 continue
-            name = f"{self.prefix}.{relative_name}".strip(".")
-            if (name, statistic) in self.values:
-                continue
-            if session.disk_cache is not None and function is None:
-                cached = session.disk_cache.get(name, statistic)
-                if cached is not None:
-                    self.values[name, statistic] = cached
+            collectors = []
+            for statistic, (function, reduction) in requirements.items():
+                if (name, statistic) in self.values:
                     continue
-            accumulator = StatisticAccumulator(statistic, function, reduction, session.sample_rows)
-            accumulators[name] = accumulator
+                cache_statistic = (f"X:{session.sample_rows}" if statistic == "X" else statistic)
+                if session.disk_cache is not None and function is None:
+                    cached = session.disk_cache.get(name, cache_statistic)
+                    if cached is not None:
+                        self.values[name, statistic] = cached
+                        continue
+                accumulator = StatisticAccumulator(statistic, function, reduction,
+                                                   session.sample_rows)
+                accumulators[name, statistic] = accumulator
+                collectors.append(accumulator)
+            if not collectors:
+                continue
 
             def observe(
                 layer: nn.Module,
                 arguments: tuple,
-                collector: StatisticAccumulator = accumulator,
+                collectors: list[StatisticAccumulator] = collectors,
             ) -> None:
-                collector.update(arguments[0])
+                inputs = arguments[0].detach().reshape(-1, arguments[0].shape[-1]).float()
+                for collector in collectors:
+                    collector.update(inputs)
 
             handles.append(module.register_forward_pre_hook(observe))
         try:
             if handles:
                 with torch.no_grad():
-                    for call in calls:
+                    for call in session.block_calls(self.index):
                         call.run(self.block)
-            for name, accumulator in accumulators.items():
+            for (name, statistic), accumulator in accumulators.items():
                 result = accumulator.result()
                 self.values[name, statistic] = result
-                if session.disk_cache is not None and function is None:
-                    session.disk_cache.put(name, statistic, result)
+                if session.disk_cache is not None and requirements[statistic][0] is None:
+                    cache_statistic = f"X:{session.sample_rows}" if statistic == "X" else statistic
+                    session.disk_cache.put(name, cache_statistic, result)
+            for name, canonical in aliases.items():
+                for statistic in requirements:
+                    if (canonical, statistic) in self.values:
+                        self.values[name, statistic] = self.values[canonical, statistic]
         finally:
             for handle in handles:
                 handle.remove()
@@ -272,8 +304,7 @@ def quantize(
         prefix = converted.architecture.block_name(index)
         original_block = copy.deepcopy(block)
         statistics = BlockStatistics(session, original_block, index, prefix)
-        for statistic, (function, reduction) in list(session.requirements.items()):
-            statistics.collect(statistic, function, reduction)
+        statistics.collect_many(dict(session.requirements))
         layers = [(name, layer) for name, layer in block.named_modules()
                   if isinstance(layer, nn.Linear)]
         contexts = {}
