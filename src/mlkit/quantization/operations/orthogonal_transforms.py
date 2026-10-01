@@ -6,12 +6,21 @@ import math
 import torch
 from torch import Tensor
 
+from mlkit.kernels.hadamard import transform
+
 
 def hadamard(value: Tensor, *, normalize: bool = True) -> Tensor:
-    """Fast Walsh-Hadamard transform along the final dimension."""
+    """Fast Walsh-Hadamard transform along the final dimension.
+
+    FP32 CUDA tensors use the fused kernel. Other dtypes, and inputs that need
+    gradients, use the equivalent stage-by-stage tensor operations.
+    """
     width = value.shape[-1]
     if width <= 0 or width & (width - 1):
         raise ValueError("hadamard currently requires a power-of-two final dimension")
+    differentiable = torch.is_grad_enabled() and value.requires_grad
+    if value.is_cuda and value.dtype == torch.float32 and not differentiable:
+        return transform(value.contiguous(), normalize=normalize)
     output = value.clone()
     stride = 1
     while stride < width:

@@ -86,3 +86,28 @@ def test_unsigned_storage_validation() -> None:
         mk.pack(torch.tensor([16]), 4)
     with pytest.raises(ValueError, match="byte count"):
         mk.unpack(torch.zeros(1, dtype=torch.uint8), 4, (4,))
+
+
+@pytest.mark.parametrize("width", [1, 2, 4, 8, 16, 32, 64, 128, 2048])
+@pytest.mark.parametrize("normalize", [True, False])
+def test_fused_hadamard_reproduces_stagewise_arithmetic(width: int, normalize: bool) -> None:
+    values = torch.randn(5, 3, width)
+    fused = mk.hadamard(values, normalize=normalize)
+    # Requesting gradients selects the stage-by-stage tensor implementation.
+    reference = mk.hadamard(values.clone().requires_grad_(True), normalize=normalize).detach()
+    assert torch.equal(fused, reference)
+    precise = mk.hadamard(values.double(), normalize=normalize).float()
+    torch.testing.assert_close(fused, precise, rtol=1e-4, atol=1e-4)
+
+
+def test_hadamard_is_differentiable_and_orthogonal() -> None:
+    values = torch.randn(4, 64, requires_grad=True)
+    transformed = mk.hadamard(values)
+    transformed.square().sum().backward()
+    torch.testing.assert_close(values.grad, 2 * values.detach(), rtol=1e-4, atol=1e-5)
+    torch.testing.assert_close(
+        mk.hadamard(values.detach()).square().sum(1),
+        values.detach().square().sum(1),
+        rtol=1e-4,
+        atol=1e-5,
+    )
