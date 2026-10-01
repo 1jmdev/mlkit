@@ -1,7 +1,10 @@
-"""Fused sequential scalar rounding inside a GPTQ update tile.
+"""Fused sequential scalar rounding inside an error-feedback tile.
 
-Matrix dimensions and tile positions are runtime arguments, so one compiled
-kernel serves every layer shape and every tile of a layer.
+Each column is rounded after adding the feedback of every earlier column:
+``target = weight + correction``, and the deviation ``weight - reconstruction``
+is propagated to later columns of the tile through the LDL feedback
+coefficients. Matrix dimensions and tile positions are runtime arguments, so
+one compiled kernel serves every layer shape and every tile of a layer.
 """
 
 import triton
@@ -14,14 +17,14 @@ ROW_TILE = 16
 
 @triton.jit
 def round_feedback_tile(
-    working,
-    upper,
+    original,
+    feedback,
+    coefficients,
     scales,
     zeros,
     values,
     output,
     encoded,
-    errors,
     input_width,
     output_width,
     region_start,
@@ -43,18 +46,20 @@ def round_feedback_tile(
     row_valid = rows < output_width
     valid = row_valid[:, None] & (columns[None, :] < tile_width)
     row_offsets = rows.to(tl.int64) * input_width
-    weights = tl.load(
-        working + row_offsets[:, None] + tile_start + columns[None, :], valid, other=0
+    corrections = tl.load(
+        feedback + row_offsets[:, None] + tile_start + columns[None, :], valid, other=0
     )
     for column in range(tile_width):
         position = tile_start + column
-        original = tl.sum(tl.where(columns[None, :] == column, weights, 0), axis=1)
+        weight = tl.load(original + row_offsets + position, row_valid, other=0)
+        correction = tl.sum(tl.where(columns[None, :] == column, corrections, 0), axis=1)
+        target = weight + correction
         scale_indices = rows * groups_per_row + (position - region_start) // group_width
         scale_values = tl.load(scales + scale_indices, row_valid, other=1)
         zero_values = tl.full((row_tile,), 0, tl.float32)
         if has_zero:
             zero_values = tl.load(zeros + scale_indices, row_valid, other=0)
-        normalized = libdevice.div_rn(original - zero_values, scale_values)
+        normalized = libdevice.div_rn(target - zero_values, scale_values)
         if integer_grid:
             codes = libdevice.nearbyint(normalized)
             codes = tl.minimum(tl.maximum(codes, minimum_code), maximum_code)
@@ -76,48 +81,49 @@ def round_feedback_tile(
             indices = tl.minimum(indices, codebook_size - 1)
             selected = tl.load(values + indices)
             reconstruction = selected * scale_values + zero_values
-        upper_row = upper + position.to(tl.int64) * input_width + tile_start
-        diagonal = tl.load(upper_row + column)
-        error = libdevice.div_rn(original - reconstruction, diagonal)
-        coefficients = tl.load(
-            upper_row + columns, (columns > column) & (columns < tile_width), other=0
+        deviation = weight - reconstruction
+        coefficient_row = tl.load(
+            coefficients + position.to(tl.int64) * input_width + tile_start + columns,
+            (columns > column) & (columns < tile_width),
+            other=0,
         )
-        weights -= error[:, None] * coefficients[None, :]
+        corrections += deviation[:, None] * coefficient_row[None, :]
         tl.store(output + row_offsets + position, reconstruction, row_valid)
         tl.store(encoded + row_offsets + position, indices.to(tl.int32), row_valid)
-        tl.store(errors + rows * tile_width + column, error, row_valid)
 
 
 def round_tile(
-    working: Tensor,
-    upper: Tensor,
+    original: Tensor,
+    feedback: Tensor,
+    coefficients: Tensor,
     scales: Tensor,
     zeros: Tensor | None,
     output: Tensor,
     encoded: Tensor,
-    errors: Tensor,
     *,
     region_start: int,
     tile_start: int,
+    tile_width: int,
     group: int,
     bits: int,
     values: Tensor,
     integer_grid: bool,
 ) -> None:
-    round_feedback_tile[(triton.cdiv(working.shape[0], ROW_TILE),)](
-        working,
-        upper,
+    """Round columns ``tile_start`` to ``tile_start + tile_width`` of every row."""
+    round_feedback_tile[(triton.cdiv(original.shape[0], ROW_TILE),)](
+        original,
+        feedback,
+        coefficients,
         scales,
         zeros,
         values,
         output,
         encoded,
-        errors,
-        working.shape[1],
-        working.shape[0],
+        original.shape[1],
+        original.shape[0],
         region_start,
         tile_start,
-        errors.shape[1],
+        tile_width,
         group,
         scales.shape[1],
         -(2 ** (bits - 1)),
@@ -127,7 +133,7 @@ def round_tile(
         values.numel(),
         triton.next_power_of_2(values.numel()),
         ROW_TILE,
-        triton.next_power_of_2(errors.shape[1]),
+        triton.next_power_of_2(tile_width),
         num_warps=4,
         enable_fp_fusion=False,
     )

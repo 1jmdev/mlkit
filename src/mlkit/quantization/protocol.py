@@ -1,5 +1,6 @@
 """Function-first quantizer and pass configuration protocols."""
 
+import dataclasses
 import functools
 import inspect
 from collections.abc import Callable
@@ -14,14 +15,37 @@ from mlkit.quantization.representation import Q, as_q
 QuantizerFunction = Callable[[Tensor, Ctx], Q | Tensor]
 
 
+@dataclasses.dataclass
+class ScalarRounding:
+    """The fitted state of a scaled scalar grid, sufficient for fused CUDA rounding.
+
+    ``bits`` is the logical cost of the complete fitted region, including scales.
+    """
+
+    grid: Grid
+    scales: Tensor
+    zero: Tensor | None
+    group: int
+    values: Tensor
+    bits: float
+    metadata: dict[str, Any]
+
+
 class FittedRounder:
     """A callable fitted format retaining optional native CUDA rounding information."""
 
     def __init__(
-        self, function: Callable[[Tensor, slice], Q], *, scalar_grid: Grid | None = None,
+        self,
+        function: Callable[[Tensor, slice], Q],
+        *,
+        scalar: ScalarRounding | None = None,
     ) -> None:
         self.function = function
-        self.scalar_grid = scalar_grid
+        self.scalar = scalar
+
+    @property
+    def scalar_grid(self) -> Grid | None:
+        return None if self.scalar is None else self.scalar.grid
 
     def __call__(self, values: Tensor, columns: slice) -> Q:
         return self.function(values, columns)
@@ -32,7 +56,10 @@ class FittedRounder:
             result.metadata.update(metadata)
             return result
 
-        return FittedRounder(round_columns, scalar_grid=self.scalar_grid)
+        scalar = self.scalar
+        if scalar is not None:
+            scalar = dataclasses.replace(scalar, metadata=scalar.metadata | metadata)
+        return FittedRounder(round_columns, scalar=scalar)
 
 
 class Quantizer:
@@ -83,7 +110,9 @@ def quantizer(function: Callable[..., Q | Tensor]) -> FunctionQuantizer:
 
 
 def fit_quantizer(
-    quantization: Callable[..., Q | Tensor], w: Tensor, ctx: Ctx
+    quantization: Callable[..., Q | Tensor],
+    w: Tensor,
+    ctx: Ctx,
 ) -> Callable[[Tensor, slice], Q]:
     if isinstance(quantization, Quantizer):
         return quantization.fit(w, ctx)

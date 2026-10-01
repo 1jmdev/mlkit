@@ -14,7 +14,7 @@ from mlkit.quantization.formats.scale_storage import SCALE_FORMAT_BITS, store_sc
 from mlkit.quantization.grids import Grid
 from mlkit.quantization.grids.lattice import nearest_e8p
 from mlkit.quantization.operations.search import nearest
-from mlkit.quantization.protocol import FittedRounder, Quantizer
+from mlkit.quantization.protocol import FittedRounder, Quantizer, ScalarRounding
 from mlkit.quantization.representation import Q
 
 
@@ -167,6 +167,21 @@ class Scaled(Quantizer):
         if zero is not None:
             magnitude, _ = store_scale(zero.abs().clamp_min(1e-12), self.scale_fmt)
             zero = magnitude * zero.sign()
+        scalar = None
+        if self.grid.dim == 1 and values is not None:
+            scalar = ScalarRounding(
+                grid=self.grid,
+                scales=scales,
+                zero=zero,
+                group=group,
+                values=values.to(w.device),
+                bits=self.grid.bits * w.numel() + side_bits,
+                metadata={
+                    "code_bits": self.grid.bits,
+                    "scale_fmt": self.scale_fmt,
+                    "trainable": ["scales"] + (["zero"] if zero is not None else []),
+                },
+            )
 
         def round_columns(value: Tensor, columns: slice) -> Q:
             start, stop, stride = columns.indices(width)
@@ -184,16 +199,15 @@ class Scaled(Quantizer):
             )
             if self.grid.dim == 1:
                 rounded = self.grid(normalized)
-                if values is not None:
-                    local_values = values.to(device=value.device)
+                if scalar is not None:
                     if self.grid.integer:
                         codes = rounded - self._value_minimum
                     else:
-                        codes = torch.searchsorted(local_values, rounded.contiguous())
+                        codes = torch.searchsorted(scalar.values, rounded.contiguous())
                     storage_dtype = torch.uint8 if self.grid.bits <= 8 else torch.int32
                     parameters: dict[str, Any] = {
                         "scales": scales,
-                        "values": local_values,
+                        "values": scalar.values,
                         "group": group,
                         "offset": start,
                         "zero": zero,
@@ -204,11 +218,7 @@ class Scaled(Quantizer):
                         params=parameters,
                         decode=decode_scaled,
                         codec="scaled",
-                        metadata={
-                            "code_bits": self.grid.bits,
-                            "scale_fmt": self.scale_fmt,
-                            "trainable": ["scales"] + (["zero"] if zero is not None else []),
-                        },
+                        metadata=scalar.metadata,
                     )
             else:
                 if value.shape[1] % self.grid.dim:
@@ -245,8 +255,7 @@ class Scaled(Quantizer):
                 reconstruction = reconstruction + zero[:, positions]
             return Q(reconstruction, bits=bits)
 
-        scalar_grid = self.grid if self.grid.dim == 1 and self.grid.values is not None else None
-        return FittedRounder(round_columns, scalar_grid=scalar_grid)
+        return FittedRounder(round_columns, scalar=scalar)
 
     def __repr__(self) -> str:
         return f"scaled({self.grid!r}, group={self.group}, scale={self.scale!r})"
