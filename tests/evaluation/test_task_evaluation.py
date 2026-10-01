@@ -1,9 +1,12 @@
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 import mlkit as mk
 
 
+@pytest.mark.device_independent
 def test_task_evaluation_applies_model_batching_options(monkeypatch) -> None:
     captured = {}
 

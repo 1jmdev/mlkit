@@ -5,7 +5,9 @@ on:
   pull_request:
 
 jobs:
-  unit-tests:
+  # Hosted runners have no CUDA device, so this job validates everything that
+  # does not execute a kernel. The CUDA suite runs locally with `uv run pytest`.
+  static-validation:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -17,5 +19,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
       - run: uv run ruff check .
-      - run: uv run pytest -m "not cuda and not integration"
+      - run: uv run mypy src/mlkit
+      - run: uv run pytest -m device_independent
       - run: uv build

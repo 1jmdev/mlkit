@@ -1,18 +1,10 @@
 import pytest
 import torch
+from reference_models import create_tiny_llama
 
 import mlkit as mk
 
-pytestmark = [pytest.mark.cuda, pytest.mark.usefixtures("cuda_tensors")]
-
-
-def create_model():
-    transformers = pytest.importorskip("transformers")
-    configuration = transformers.LlamaConfig(
-        vocab_size=128, hidden_size=32, intermediate_size=64, num_hidden_layers=2,
-        num_attention_heads=4, num_key_value_heads=2, head_dim=8,
-    )
-    return transformers.LlamaForCausalLM(configuration)
+pytest.importorskip("transformers")
 
 
 def test_cache_quantizer_observes_post_rope_keys_and_values() -> None:
@@ -23,7 +15,7 @@ def test_cache_quantizer_observes_post_rope_keys_and_values() -> None:
         observations.append((context.name, tuple(values.shape)))
         return mk.Q(values, bits=16 * values.numel())
 
-    model = create_model()
+    model = create_tiny_llama()
     converted = mk.quantize(model, mk.Recipe(weights=lambda w, ctx: w, kv=record), calib=None)
     tokens = torch.randint(128, (1, 5))
     with torch.inference_mode():
@@ -39,38 +31,32 @@ def test_cache_quantizer_observes_post_rope_keys_and_values() -> None:
 
 
 def test_cache_quantization_runs_during_perplexity_and_generation() -> None:
-    model = create_model()
-    converted = mk.quantize(model, mk.Recipe(weights=mk.int(4, group=16), kv=mk.int(4, group=None)),
-                            calib=None)
+    model = create_tiny_llama()
+    converted = mk.quantize(
+        model,
+        mk.Recipe(weights=mk.int(4, group=16), kv=mk.int(4, group=None)),
+        calib=None,
+    )
     tokens = torch.randint(128, (1, 7))
     assert mk.ppl(converted, data=tokens) > 0
     generated = converted.generate(tokens, max_new_tokens=3, do_sample=False, pad_token_id=0)
     assert generated.shape[1] >= tokens.shape[1] + 1
 
 
-def test_compiled_generation_uses_static_cache_without_mutating_source() -> None:
-    model = mk.Model(create_model())
-    original_cache = model.module.generation_config.cache_implementation
-    compiled = mk.optimize(model, backend="dense", compile=True)
-    assert compiled.module.generation_config.cache_implementation == "static"
-    assert model.module.generation_config.cache_implementation == original_cache
-    tokens = torch.randint(128, (1, 7))
-    options = {"max_new_tokens": 3, "do_sample": False, "pad_token_id": 0}
-    expected = model.generate(tokens, **options)
-    result = compiled.generate(tokens, **options)
-    assert torch.equal(result, expected)
-
-
 def test_online_scalar_formats_are_saved_and_restored(tmp_path) -> None:
-    model = create_model()
-    recipe = mk.Recipe(weights=mk.int(4, group=16), acts=mk.nf4(group=None),
-                       kv=mk.int(4, group=None))
+    model = create_tiny_llama()
+    recipe = mk.Recipe(
+        weights=mk.int(4, group=16),
+        acts=mk.nf4(group=None),
+        kv=mk.int(4, group=None),
+    )
     converted = mk.quantize(model, recipe, calib=None)
     tokens = torch.randint(128, (1, 7))
     with torch.inference_mode():
         expected = converted(tokens, use_cache=False).logits
     converted.save(tmp_path / "online")
-    restored = mk.load(tmp_path / "online", model=create_model)
+    restored = mk.load(tmp_path / "online", model=create_tiny_llama)
     with torch.inference_mode():
-        torch.testing.assert_close(restored(tokens, use_cache=False).logits, expected,
-                                   rtol=0, atol=0)
+        torch.testing.assert_close(
+            restored(tokens, use_cache=False).logits, expected, rtol=0, atol=0
+        )

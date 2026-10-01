@@ -29,8 +29,12 @@ packages = ["src/mlkit"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
-markers = ["cuda: requires a CUDA device", "integration: requires downloaded model artifacts"]
+pythonpath = ["tests"]
+addopts = "-ra --import-mode=importlib"
+markers = [
+    "device_independent: runs without a CUDA device",
+    "integration: requires downloaded model artifacts",
+]
 
 [tool.ruff]
 line-length = 100
@@ -44,3 +48,8 @@ python_version = "3.11"
 files = ["src/mlkit"]
 check_untyped_defs = true
 ignore_missing_imports = true
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+extraPaths = ["src", "tests"]

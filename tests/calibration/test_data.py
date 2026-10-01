@@ -1,11 +1,13 @@
 import sys
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 import mlkit as mk
 
 
+@pytest.mark.device_independent
 def test_wikitext_uses_one_contiguous_tokenization(monkeypatch) -> None:
     texts = ["", "Alpha", "", "Beta"]
     requests = []

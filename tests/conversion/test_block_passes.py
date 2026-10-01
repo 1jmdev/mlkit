@@ -1,10 +1,7 @@
-import pytest
 import torch
 from torch import nn
 
 import mlkit as mk
-
-pytestmark = [pytest.mark.cuda, pytest.mark.usefixtures("cuda_tensors")]
 
 
 def test_codec_parameters_are_trained_and_cached(tmp_path) -> None:
@@ -13,27 +10,27 @@ def test_codec_parameters_are_trained_and_cached(tmp_path) -> None:
     calibration = [torch.randn(4, 16) for _ in range(4)]
     observations = {}
 
+    def reconstruction_error(block, ctx):
+        return sum(
+            (ctx.forward(block, call.hidden()) - target).square().mean()
+            for call, target in zip(ctx.calls, ctx.targets.split(4), strict=True)
+        )
+
     @mk.block_pass
     def train_block(block, ctx):
         assert len(ctx.qparams) == 2
         with torch.no_grad():
-            observations["before"] = sum(
-                (ctx.forward(block, call.hidden()) - target).square().mean()
-                for call, target in zip(ctx.calls, ctx.targets.split(4), strict=True)
-            )
+            observations["before"] = reconstruction_error(block, ctx)
         mk.finetune(block, ctx, steps=30, lr=0.002, bs=2)
         with torch.no_grad():
-            observations["after"] = sum(
-                (ctx.forward(block, call.hidden()) - target).square().mean()
-                for call, target in zip(ctx.calls, ctx.targets.split(4), strict=True)
-            )
+            observations["after"] = reconstruction_error(block, ctx)
 
     recipe = mk.Recipe(weights=mk.int(2, group=8), passes=[train_block])
     converted = mk.quantize(model, recipe, calib=calibration)
     assert observations["after"] < observations["before"]
     assert isinstance(converted.module[0], nn.Linear)
     assert converted.module[0].weight.requires_grad
-    torch.testing.assert_close(converted.module[0].weight.cpu(), converted.quantized["0"].w)
+    torch.testing.assert_close(converted.module[0].weight.cpu(), converted.quantized["0"].w.cpu())
     record = converted.pass_reports[0]
     assert record.steps == 30
     assert record.seconds > 0
@@ -43,9 +40,10 @@ def test_codec_parameters_are_trained_and_cached(tmp_path) -> None:
     expected_loss = float(mk.proxy_loss(model[0].weight, converted.module[0].weight).detach())
     assert converted.layer_reports[0].loss == expected_loss
     converted.save(tmp_path / "finetuned")
-    restored = mk.load(tmp_path / "finetuned", model=lambda: nn.Sequential(
-        nn.Linear(16, 16), nn.ReLU(), nn.Linear(16, 8)
-    ))
+    restored = mk.load(
+        tmp_path / "finetuned",
+        model=lambda: nn.Sequential(nn.Linear(16, 16), nn.ReLU(), nn.Linear(16, 8)),
+    )
     assert restored.pass_reports == converted.pass_reports
 
 
@@ -82,8 +80,12 @@ def test_shared_vector_grid_stays_fixed_during_block_finetuning() -> None:
     inputs = [torch.randn(4, 8) for _ in range(2)]
     module = nn.Sequential(nn.Linear(8, 8, bias=False), nn.Linear(8, 8, bias=False))
     converted = mk.quantize(
-        module, mk.Recipe(weights=format, passes=[mk.finetune(steps=3, bs=1)]), calib=inputs
+        module,
+        mk.Recipe(weights=format, passes=[mk.finetune(steps=3, bs=1)]),
+        calib=inputs,
     )
     for representation in converted.quantized.values():
-        torch.testing.assert_close(representation.params["values"], codebook.cpu(), rtol=0, atol=0)
+        torch.testing.assert_close(
+            representation.params["values"].cpu(), codebook.cpu(), rtol=0, atol=0
+        )
     assert sum(record.bits for record in converted.layer_reports) == 2 * (2 * 64 + 16 * 8) + 1024

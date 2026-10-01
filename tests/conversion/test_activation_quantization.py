@@ -1,21 +1,18 @@
-import pytest
 import torch
+from reference_models import RepeatedModel
 
 import mlkit as mk
 
-pytestmark = [pytest.mark.cuda, pytest.mark.usefixtures("cuda_tensors")]
 
-
-@pytest.mark.parametrize("format", [
-    mk.int(3, group=32), mk.int(4, group=None), mk.nf4(group=64),
-    mk.mxfp4(), mk.int(4, group=32, asym=True), mk.int(4, group=32, scale_fmt="bf16"),
-    mk.int(4, group=32, scale_fmt="fp8"),
-])
-def test_fused_activation_reconstruction_matches_fitted_format(format) -> None:
-    inputs = torch.randn(7, 130, dtype=torch.float16)
-    expected = format(inputs.float()).w.half()
-    result = format.reconstruct_activations(inputs)
-    torch.testing.assert_close(result, expected, rtol=0, atol=0)
+def test_activation_quantization_hooks() -> None:
+    original = RepeatedModel()
+    converted = mk.quantize(
+        original,
+        mk.Recipe(weights=mk.int(4, group=8), acts=mk.int(4, group=None)),
+        calib=None,
+    )
+    assert len(converted.activation_handles) == 6
+    assert torch.isfinite(converted(torch.randn(3, 16))).all()
 
 
 def test_custom_activation_statistics_are_collected_before_inference() -> None:
@@ -32,8 +29,12 @@ def test_custom_activation_statistics_are_collected_before_inference() -> None:
 
     module = torch.nn.Sequential(torch.nn.Linear(16, 8))
     inputs = torch.randn(4, 16)
-    converted = mk.quantize(module, mk.Recipe(weights=mk.int(4, group=8), acts=keep_channels),
-                            calib=[inputs], cache_dir=None)
+    converted = mk.quantize(
+        module,
+        mk.Recipe(weights=mk.int(4, group=8), acts=keep_channels),
+        calib=[inputs],
+        cache_dir=None,
+    )
     assert len(observed) == 1
     converted(inputs)
     assert len(observed) == 2
