@@ -85,9 +85,14 @@ class ErrorFeedback(Quantizer):
             )
         if permutation is None:
             del diagonal, hessian
-        inverse = torch.cholesky_inverse(factor)
+        if factor.requires_grad:
+            inverse = torch.cholesky_inverse(factor)
+            upper = torch.linalg.cholesky(inverse, upper=True).contiguous()
+        else:
+            inverse = torch.cholesky_inverse(factor, out=factor)
+            torch.linalg.cholesky(inverse, upper=True, out=inverse)
+            upper = inverse.contiguous()
         del factor
-        upper = torch.linalg.cholesky(inverse, upper=True).contiguous()
         del inverse
         output = torch.empty_like(working)
         total_bits: float | None = 0.0
