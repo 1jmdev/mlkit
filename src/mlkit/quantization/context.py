@@ -126,6 +126,20 @@ class Ctx:
         """Side-information bits declared through add_bits during this quantizer call."""
         return self._additional_bits
 
+    def derive(
+        self,
+        provider: Callable[[str, Callable[[Tensor], Tensor] | None, str], Tensor],
+    ) -> "Ctx":
+        """A context for transformed weights whose statistics come from ``provider``.
+
+        Algorithms that permute or rotate the weight columns use this to supply the
+        inner quantizer with statistics expressed in the transformed basis.
+        """
+        derived = self.replace()
+        derived._stats = {}
+        derived._provider = provider
+        return derived
+
     def replace(self, **overrides: Any) -> "Ctx":
         copied = Ctx(
             self.name,

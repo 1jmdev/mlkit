@@ -42,7 +42,7 @@ class Incoherent(Quantizer):
             transformed = structured_transform(transformed * right_signs)
         transformed_context = ctx.replace()
         if right_signs is not None:
-            original_provider = transformed_context._provider
+            original_provider = ctx._provider
 
             def provider(name: str, fn: Callable | None, reduce: str) -> Tensor:
                 if name == "H":
@@ -61,10 +61,9 @@ class Incoherent(Quantizer):
                     return original_provider(name, fn, reduce)
                 raise KeyError(name)
 
-            transformed_context._stats = {}
-            transformed_context._provider = provider
+            transformed_context = ctx.derive(provider)
         quantized = as_q(self.inner(transformed, transformed_context))
-        ctx.add_bits(transformed_context._additional_bits)
+        ctx.add_bits(transformed_context.additional_bits)
         if quantized.codes is not None and registered(quantized.codec):
             result = compose(quantized, "basis", {
                 "shape": tuple(w.shape),
