@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as functional
 from torch import Tensor, nn
 
+from mlkit.kernels.packed_linear import decode, matrix_vector
 from mlkit.quantization.packing import pack
 from mlkit.quantization.representation import Q
 from mlkit.runtime.engine import forward_batch, synchronize
@@ -77,8 +78,6 @@ class PackedLinear(nn.Module):
     def weight(self) -> Tensor:
         if self._dense_weight is not None:
             return self._dense_weight
-        from mlkit.runtime.kernels.packed_linear import decode
-
         reconstruction = torch.empty(
             (self.out_features, self.in_features), device=self.packed.device,
             dtype=self.storage_dtype,
@@ -99,8 +98,6 @@ class PackedLinear(nn.Module):
         if len(flattened) <= self.maximum_fused_rows:
             if torch.is_grad_enabled() and inputs.requires_grad:
                 raise RuntimeError("packed CUDA inference does not support autograd")
-            from mlkit.runtime.kernels.packed_linear import matrix_vector
-
             output = inputs.new_empty((len(flattened), self.out_features))
             matrix_vector(
                 flattened, self.packed, self.scales, self.values, self.zeros, self.bias,
@@ -138,10 +135,6 @@ def optimize(
     if backend == "packed":
         if not isinstance(wrapped, QModel):
             raise ValueError("packed inference requires a QModel with codec state")
-        try:
-            import triton  # noqa: F401
-        except ImportError as error:
-            raise ImportError("packed CUDA inference requires Triton") from error
         for name, quantized in wrapped.quantized.items():
             module = wrapped.module.get_submodule(name)
             if isinstance(module, nn.Linear) and packed_compatible(quantized):

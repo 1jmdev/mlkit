@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as functional
 from torch import Tensor
 
+from mlkit.kernels.activation_reconstruction import reconstruct
 from mlkit.quantization.context import Ctx
 from mlkit.quantization.grids import NF4_VALUES, Grid, grid
 from mlkit.quantization.operations import nearest
@@ -129,8 +130,6 @@ class Scaled(Quantizer):
         if not supported:
             return self(value.float()).w.to(value.dtype)
         assert isinstance(self.scale_fmt, str)
-        from mlkit.runtime.kernels.activations import reconstruct
-
         values = self._activation_values.get(value.device)
         if values is None:
             assert self.grid.values is not None

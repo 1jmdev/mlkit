@@ -7,6 +7,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
+from mlkit.kernels.error_feedback import round_tile
 from mlkit.quantization.codecs import compose, deterministic_signs, registered
 from mlkit.quantization.context import Ctx, copy_cache, layer_seed
 from mlkit.quantization.formats import decode_feedback, decode_vector_scaled
@@ -124,8 +125,6 @@ class ErrorFeedback(Quantizer):
                 raise ValueError("fused GPTQ requires CUDA, step=1, and a native scalar rounder")
             if use_fused:
                 assert scalar_grid is not None
-                from mlkit.runtime.kernels.error_feedback import round_tile
-
                 initial = rounder(working[:, region_start:region_stop], slice(None))
                 assert initial.codes is not None
                 if encoded is None:

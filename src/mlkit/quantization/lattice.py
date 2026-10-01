@@ -10,6 +10,8 @@ import functools
 import torch
 from torch import Tensor
 
+from mlkit.kernels.lattice_search import search
+
 NORM_TWELVE_MASKS = (
     241, 242, 244, 248, 55, 87, 103, 151, 167, 199,
     59, 91, 107, 155, 171, 203, 61, 93, 109, 157, 173,
@@ -52,8 +54,6 @@ def nearest_e8p(
     if backend not in {"auto", "torch", "triton"}:
         raise ValueError("E8P backend must be auto, torch or triton")
     if value.is_cuda and backend != "torch":
-        from mlkit.runtime.kernels.lattice import search
-
         indices = search(value, device_points(value.device, absolute=True))
         if return_indices:
             return indices

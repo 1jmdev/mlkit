@@ -5,6 +5,8 @@ from collections.abc import Callable
 import torch
 from torch import Tensor
 
+from mlkit.kernels.trellis_decode import decode
+from mlkit.kernels.viterbi_search import search
 from mlkit.quantization.context import Ctx
 from mlkit.quantization.protocol import Quantizer
 from mlkit.quantization.representation import Q
@@ -36,8 +38,6 @@ def viterbi(
         raise ValueError("Viterbi backend must be auto, torch, or triton")
     codes = codes.to(device=value.device, dtype=torch.float32)
     if value.device.type == "cuda" and backend != "torch" and L <= 12:
-        from mlkit.runtime.kernels.viterbi import search
-
         states = search(value.float().contiguous(), codes, L, k)
     else:
         if backend == "triton":
@@ -80,8 +80,6 @@ def decode_trellis(
         scale.requires_grad or (codebook is not None and codebook.requires_grad)
     )
     if transitions.is_cuda and not needs_gradients:
-        from mlkit.runtime.kernels.trellis_decode import decode
-
         return decode(transitions, initial_states, scale, shape, tile, L, k, codebook)
     time = torch.arange(transitions.shape[1] + 1, device=transitions.device)
     shifts = (time * k).clamp_max(L)
