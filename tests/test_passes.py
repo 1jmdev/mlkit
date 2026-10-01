@@ -45,3 +45,19 @@ def test_block_pass_configuration() -> None:
 
     record(count=3)(None, None)
     assert observed == [3]
+
+
+def test_half_precision_normalization_finetuning_stays_finite() -> None:
+    dtype = torch.float16
+    module = nn.Sequential(nn.LayerNorm(16, dtype=dtype), nn.Linear(16, 16, dtype=dtype))
+    inputs = [torch.randn(4, 16, dtype=dtype) for _ in range(4)]
+    original_norm = module[0].weight.detach().clone()
+    converted = mk.quantize(
+        module,
+        mk.Recipe(weights=mk.int(2, group=8), passes=[mk.finetune(steps=10, bs=2)]),
+        calib=inputs,
+    )
+    assert all(torch.isfinite(parameter).all() for parameter in converted.parameters())
+    assert torch.isfinite(converted(inputs[0])).all()
+    assert not torch.equal(converted.module[0].weight, original_norm)
+    assert converted.module[0].weight.dtype == dtype

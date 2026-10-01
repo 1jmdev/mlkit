@@ -183,11 +183,19 @@ def finetune(
     parameters = ctx.qparams + norm_params(block)
     if not parameters or steps == 0:
         return
-    optimizer = torch.optim.Adam(parameters, lr=lr)
+    optimizer_parameters = [
+        nn.Parameter(parameter.detach().float())
+        if parameter.dtype in {torch.float16, torch.bfloat16} else parameter
+        for parameter in parameters
+    ]
+    optimizer = torch.optim.Adam(optimizer_parameters, lr=lr)
     device = next(block.parameters()).device
     for _ in range(steps):
         indices = torch.randint(len(ctx.calls), (bs,), generator=ctx.rng, device=device).tolist()
         optimizer.zero_grad(set_to_none=True)
+        for parameter, optimizer_parameter in zip(parameters, optimizer_parameters, strict=True):
+            if parameter is not optimizer_parameter:
+                parameter.grad = None
         total_loss = 0.0
         for index in indices:
             prediction = extract_hidden(ctx.calls[index].run(block))
@@ -197,5 +205,16 @@ def finetune(
             loss = functional.mse_loss(prediction.float(), target.float()) / bs
             loss.backward()
             total_loss += float(loss.detach())
+        for parameter, optimizer_parameter in zip(parameters, optimizer_parameters, strict=True):
+            if parameter is not optimizer_parameter:
+                optimizer_parameter.grad = (
+                    None if parameter.grad is None else parameter.grad.detach().float()
+                )
         optimizer.step()
+        with torch.no_grad():
+            for parameter, optimizer_parameter in zip(
+                parameters, optimizer_parameters, strict=True
+            ):
+                if parameter is not optimizer_parameter:
+                    parameter.copy_(optimizer_parameter)
         ctx.loss_history.append(total_loss)

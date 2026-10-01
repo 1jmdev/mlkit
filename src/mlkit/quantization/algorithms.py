@@ -80,7 +80,9 @@ class ErrorFeedback(Quantizer):
         diagonal.add_(self.damp * diagonal.mean().clamp_min(1e-12))
         factor, status = torch.linalg.cholesky_ex(hessian)
         if status.item() != 0:
-            raise ValueError("calibration Hessian is not positive definite; increase damp")
+            raise ValueError(
+                f"calibration Hessian for {ctx.name!r} is not positive definite; increase damp"
+            )
         if permutation is None:
             del diagonal, hessian
         inverse = torch.cholesky_inverse(factor)
