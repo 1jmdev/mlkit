@@ -1,4 +1,5 @@
 import copy
+import weakref
 
 import pytest
 import torch
@@ -118,6 +119,19 @@ def test_selected_calibration_blocks_capture_only_requested_inputs() -> None:
     with torch.no_grad():
         expected = wrapped.blocks[0](inputs)
     torch.testing.assert_close(session.block_calls(1)[0].hidden(), expected.cpu(), rtol=0, atol=0)
+
+
+def test_conversion_releases_completed_layer_hessians() -> None:
+    hessians = []
+
+    @mk.quantizer
+    def record(weight, context):
+        hessians.append(weakref.ref(context.H))
+        return mk.Q(weight.clone(), bits=16 * weight.numel())
+
+    mk.quantize(RepeatedModel(), record, calib=[torch.randn(2, 16)], cache_dir=None)
+    assert len(hessians) == 6
+    assert all(reference() is None for reference in hessians)
 
 
 def test_custom_statistics_and_disk_cache(tmp_path) -> None:

@@ -400,6 +400,9 @@ def quantize(
                     converted.activation_handles.append(install_activation_quantization(
                         layer, activation_quantizer, activation_context
                     ))
+            if not definition.passes:
+                context._stats.clear()
+            del result, reconstruction, weight, known_hessian, loss_context
         if definition.passes:
             from mlkit.runtime.passes import run_block_passes
 
