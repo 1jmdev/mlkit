@@ -224,6 +224,10 @@ def export_torchao(
     wrapped = model if isinstance(model, Model) else Model(model)
     module = copy.deepcopy(wrapped.module)
     if bits == 4:
+        if packing_format == "tile_packed_to_4d":
+            for parameter in module.parameters():
+                if parameter.is_floating_point():
+                    parameter.data = parameter.data.bfloat16()
         configuration = Int4WeightOnlyConfig(
             group_size=group, int4_packing_format=Int4PackingFormat(packing_format),
             set_inductor_config=False,
@@ -232,10 +236,16 @@ def export_torchao(
         configuration = Int8WeightOnlyConfig(version=2, set_inductor_config=False)
     else:
         raise ValueError("TorchAO export supports four-bit or eight-bit weights")
-    quantize_(module, configuration)
+    quantize_(module, configuration, filter_fn=quantizable_linear)
     converted = Model(module, wrapped.tokenizer, name=wrapped.name)
     converted.execution_backend = f"torchao-int{bits}"
     return converted
+
+
+def quantizable_linear(module: nn.Module, name: str) -> bool:
+    return isinstance(module, nn.Linear) and name.split(".")[-1] not in {
+        "lm_head", "embed_out", "output",
+    }
 
 
 @dataclass

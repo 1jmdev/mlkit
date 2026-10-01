@@ -86,3 +86,26 @@ def test_packed_copy_rebinds_activation_context_and_owns_its_storage() -> None:
         converted.module[0].weight.zero_()
         torch.testing.assert_close(packed(inputs), actual, rtol=0, atol=0)
     assert packed.storage_bytes < converted.storage_bytes
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize("bits", [4, 8])
+def test_torchao_export_executes_and_reports_physical_storage(bits: int) -> None:
+    pytest.importorskip("torchao")
+    device = "cuda"
+    dtype = torch.float16
+    module = nn.Sequential(nn.Linear(1024, 128, device=device, dtype=dtype))
+    module.register_buffer("precision_reference", torch.ones(4, device=device, dtype=torch.float32))
+    original = module[0].weight.detach().clone()
+    exported = mk.export_torchao(module, bits=bits, group=32)
+    inputs = torch.randn(3, 1024, device=device, dtype=exported.dtype)
+    with torch.inference_mode():
+        actual = exported(inputs)
+        expected = torch.nn.functional.linear(
+            inputs, original.to(inputs.dtype), module[0].bias.to(inputs.dtype)
+        )
+    relative_error = (actual - expected).float().square().mean().sqrt() / expected.float().std()
+    assert float(relative_error) < 0.2
+    assert exported.storage_bytes < original.numel() * original.element_size()
+    assert exported.module.precision_reference.dtype == torch.float32
+    torch.testing.assert_close(module[0].weight, original, rtol=0, atol=0)

@@ -150,7 +150,18 @@ class Model(nn.Module):
     def storage_bytes(self) -> int:
         """Bytes in distinct registered parameter and buffer storages, excluding KV caches."""
         storages = {}
-        for tensor in [*self.module.parameters(), *self.module.buffers()]:
+        pending = [*self.module.parameters(), *self.module.buffers()]
+        visited = set()
+        while pending:
+            tensor = pending.pop()
+            if id(tensor) in visited:
+                continue
+            visited.add(id(tensor))
+            flatten = getattr(tensor, "__tensor_flatten__", None)
+            if flatten is not None:
+                names, _ = flatten()
+                pending.extend(getattr(tensor, name) for name in names)
+                continue
             storage = tensor.untyped_storage()
             storages[(tensor.device, storage.data_ptr())] = storage.nbytes()
         return sum(storages.values())

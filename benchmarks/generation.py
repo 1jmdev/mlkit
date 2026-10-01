@@ -17,6 +17,12 @@ def main() -> None:
     parser.add_argument("--tokens", type=int, default=64)
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--compile", action="store_true")
+    parser.add_argument(
+        "--backends", nargs="+",
+        choices=[
+            "baseline", "baseline-compiled", "dense", "packed", "torchao-int4", "torchao-int8",
+        ],
+    )
     parser.add_argument("--output", type=Path, default=Path("benchmark_results/generation.json"))
     arguments = parser.parse_args()
     records = []
@@ -27,14 +33,16 @@ def main() -> None:
         "compiled": arguments.compile,
         "cuda": torch.version.cuda,
         "dtype": "float16",
-        "quantization": {"method": "rtn", "bits": 4, "group": 128, "seed": 0},
+        "rtn_quantization": {"bits": 4, "group": 128, "seed": 0},
         "warmup_generations": 2,
         "measurements": records,
     }
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
-    backends = ["baseline", "baseline-compiled", "dense", "packed"] if arguments.compile else [
-        "baseline", "dense", "packed",
-    ]
+    backends = arguments.backends
+    if backends is None:
+        backends = ["baseline", "baseline-compiled", "dense", "packed"] if arguments.compile else [
+            "baseline", "dense", "packed",
+        ]
     for backend in backends:
         model = mk.load(arguments.model, dtype="float16")
         tokenizer = model.tokenizer
@@ -46,6 +54,14 @@ def main() -> None:
             selected = model
         elif backend == "baseline-compiled":
             selected = mk.optimize(model, backend="dense", compile=True, inplace=True)
+        elif backend.startswith("torchao-"):
+            exported = mk.export_torchao(model, bits=int(backend[-1]))
+            del model
+            selected = mk.optimize(
+                exported, backend="dense", compile=arguments.compile, inplace=True
+            )
+            selected.execution_backend = backend + ("+compiled" if arguments.compile else "")
+            del exported
         else:
             quantized = mk.quantize(model, mk.int(4, group=128), calib=None)
             del model
@@ -73,6 +89,7 @@ def main() -> None:
             "prompt_tokens": inputs["input_ids"].numel(), "generated_tokens": arguments.tokens,
             "tokens_per_second": arguments.tokens * 1000 / measurement.median_ms,
             "model_storage_bytes": selected.storage_bytes,
+            "dtype": str(selected.dtype).removeprefix("torch."),
             "generated_ids": output[0, inputs["input_ids"].shape[1] :].tolist(),
             **measurement.to_dict(),
         }
