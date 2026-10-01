@@ -90,6 +90,7 @@ class ErrorFeedback(Quantizer):
         region_scales = []
         region_zeros = []
         retain_codec = True
+        trellis_parts = []
         refit_width = width if self.refit is None else self.refit
         for region_start in range(0, width, refit_width):
             region_stop = min(width, region_start + refit_width)
@@ -108,6 +109,7 @@ class ErrorFeedback(Quantizer):
             if self.backend == "triton" and not use_fused:
                 raise ValueError("fused GPTQ requires CUDA, step=1, and a scaled integer grid")
             if use_fused:
+                assert isinstance(self.inner, Scaled)
                 from mlkit.kernels.error_feedback import round_tile
 
                 initial = rounder(working[:, region_start:region_stop], slice(None))
@@ -145,6 +147,8 @@ class ErrorFeedback(Quantizer):
                         slice(column - region_start, stop - region_start),
                     ))
                     reconstruction = quantized.w
+                    if quantized.codec == "trellis" and self.refit is None and permutation is None:
+                        trellis_parts.append(quantized)
                     if retain_codec:
                         if quantized.codec != "scaled" or quantized.codes is None:
                             retain_codec = False
@@ -191,6 +195,21 @@ class ErrorFeedback(Quantizer):
                     "permutation": permutation,
                 },
                 metadata=codec_metadata,
+            )
+        if trellis_parts and len(trellis_parts) == width // self.step:
+            from mlkit.trellis import decode_trellis
+
+            parameters = trellis_parts[0].params | {
+                "shape": tuple(w.shape),
+                "initial_states": torch.cat([
+                    part.params["initial_states"] for part in trellis_parts
+                ]),
+            }
+            return Q(
+                codes=torch.cat([part.codes for part in trellis_parts if part.codes is not None]),
+                params=parameters,
+                decode=decode_trellis, codec="trellis", bits=total_bits,
+                metadata=trellis_parts[0].metadata,
             )
         return Q(output, bits=total_bits)
 
