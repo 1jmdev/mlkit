@@ -13,6 +13,22 @@ def layer_seed(name: str, seed: int = 0) -> int:
     return int.from_bytes(digest[:8], "little") % (2**63 - 1)
 
 
+def copy_cache(cache: dict[str, Any]) -> dict[str, Any]:
+    """Copy mutable bookkeeping containers while sharing tensor and module storage."""
+    def copy_container(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: copy_container(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [copy_container(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(copy_container(item) for item in value)
+        if isinstance(value, set):
+            return value.copy()
+        return value
+
+    return copy_container(cache)
+
+
 class Ctx:
     """Statistics are supplied only when requested by the quantizer.
 

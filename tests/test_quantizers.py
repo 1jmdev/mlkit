@@ -126,3 +126,22 @@ def test_scalar_and_vector_search() -> None:
     expected_indices = torch.cdist(samples, vectors).argmin(1)
     indices = mk.nearest(samples, vectors, chunk=7, codebook_chunk=5, return_indices=True)
     assert torch.equal(indices, expected_indices)
+
+
+def test_best_of_isolates_nested_side_information_accounting() -> None:
+    weight = torch.randn(8, 16)
+
+    @mk.quantizer
+    def candidate(values, context, reconstruct=False):
+        accounted = context.cache.setdefault("accounted", set())
+        if "codebook" not in accounted:
+            context.add_bits(128)
+            accounted.add("codebook")
+        result = values if reconstruct else torch.zeros_like(values)
+        return mk.Q(result, bits=4 * values.numel())
+
+    context = mk.Ctx(cache={"accounted": set()})
+    result = mk.best_of(candidate, candidate(reconstruct=True), by="mse")(weight, context)
+    torch.testing.assert_close(result.w, weight)
+    assert context.additional_bits == 128
+    assert context.cache["accounted"] == {"codebook"}

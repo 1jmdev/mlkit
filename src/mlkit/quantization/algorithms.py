@@ -8,7 +8,7 @@ import torch
 from torch import Tensor
 
 from mlkit.quantization.codecs import compose, deterministic_signs, registered
-from mlkit.quantization.context import Ctx, layer_seed
+from mlkit.quantization.context import Ctx, copy_cache, layer_seed
 from mlkit.quantization.formats import Scaled, decode_feedback, decode_vector_scaled
 from mlkit.quantization.operations import proxy_loss
 from mlkit.quantization.protocol import Quantizer, fit_quantizer
@@ -262,7 +262,7 @@ class ActivationAware(Quantizer):
             scales /= (scales.max() * scales.min()).sqrt()
             scales = scales.clamp(2**-24, 65504).half().float()
             transformed_hessian = hessian / scales[:, None] / scales[None, :]
-            trial_cache = dict(ctx.cache)
+            trial_cache = copy_cache(ctx.cache)
             candidates = {}
             loss = 0.0
             for index, (name, weight) in enumerate(weights.items()):
@@ -389,8 +389,8 @@ class BestOf(Quantizer):
         minimum_loss = float("inf")
         base_bits, selected_bits = ctx._additional_bits, 0.0
         for quantization in self.candidates:
-            candidate_context = ctx.replace(cache=dict(ctx.cache))
-            candidate = as_q(quantization(w, candidate_context))
+            candidate_context = ctx.replace(cache=copy_cache(ctx.cache))
+            candidate = as_q(quantization(w.clone(), candidate_context))
             loss = float(proxy_loss(w, candidate.w, ctx if self.by == "proxy" else None))
             if loss < minimum_loss:
                 selected, minimum_loss = candidate, loss
