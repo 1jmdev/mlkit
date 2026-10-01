@@ -1,6 +1,5 @@
-"""Grouped scaling, fitting, and portable scalar-grid codecs."""
+"""Grouped scaling and fitting of scalar and vector grids."""
 
-import builtins
 from collections.abc import Callable
 from typing import Any
 
@@ -9,94 +8,26 @@ import torch.nn.functional as functional
 from torch import Tensor
 
 from mlkit.kernels.activation_reconstruction import reconstruct
+from mlkit.quantization.codecs.scaled import decode_scaled, decode_vector_scaled
 from mlkit.quantization.context import Ctx
-from mlkit.quantization.grids import NF4_VALUES, Grid, grid
-from mlkit.quantization.operations import nearest
+from mlkit.quantization.formats.scale_storage import SCALE_FORMAT_BITS, store_scale
+from mlkit.quantization.grids import Grid
+from mlkit.quantization.grids.lattice import nearest_e8p
+from mlkit.quantization.operations.search import nearest
 from mlkit.quantization.protocol import FittedRounder, Quantizer
 from mlkit.quantization.representation import Q
-
-
-def decode_scaled(
-    codes: Tensor,
-    *,
-    scales: Tensor,
-    values: Tensor,
-    group: builtins.int,
-    offset: builtins.int = 0,
-    zero: Tensor | None = None,
-) -> Tensor:
-    columns = torch.arange(offset, offset + codes.shape[1], device=codes.device) // group
-    reconstruction = values[codes.long()] * scales[:, columns]
-    return reconstruction if zero is None else reconstruction + zero[:, columns]
-
-
-def decode_feedback(
-    codes: Tensor,
-    *,
-    scales: Tensor,
-    values: Tensor,
-    group: builtins.int,
-    refit: builtins.int,
-    zero: Tensor | None = None,
-    permutation: Tensor | None = None,
-) -> Tensor:
-    columns = torch.arange(codes.shape[1], device=codes.device)
-    groups_per_region = (refit + group - 1) // group
-    scale_indices = (columns // refit) * groups_per_region + (columns % refit) // group
-    reconstruction = values[codes.long()] * scales[:, scale_indices]
-    if zero is not None:
-        reconstruction = reconstruction + zero[:, scale_indices]
-    return reconstruction if permutation is None else reconstruction[:, permutation.argsort()]
-
-
-def decode_vector_scaled(
-    codes: Tensor, *, scales: Tensor, values: Tensor | None, group: builtins.int,
-    dim: builtins.int, offset: builtins.int = 0, zero: Tensor | None = None,
-    refit: builtins.int | None = None, permutation: Tensor | None = None,
-) -> Tensor:
-    if values is None:
-        from mlkit.quantization.lattice import device_points
-
-        values = device_points(codes.device)
-    width = codes.shape[1] * dim
-    columns = torch.arange(offset, offset + width, device=codes.device)
-    positions = columns // group if refit is None else (
-        (columns // refit) * ((refit + group - 1) // group) + (columns % refit) // group
-    )
-    reconstruction = values[codes.long()].reshape(codes.shape[0], width) * scales[:, positions]
-    if zero is not None:
-        reconstruction = reconstruction + zero[:, positions]
-    return reconstruction if permutation is None else reconstruction[:, permutation.argsort()]
-
-
-def store_scale(value: Tensor, format: str | Grid) -> tuple[Tensor, builtins.int]:
-    if isinstance(format, Grid):
-        if format.dim != 1:
-            raise ValueError("scale grids must be scalar")
-        return format(value).clamp_min(torch.finfo(torch.float32).tiny), format.bits
-    if format == "fp32":
-        return value.float(), 32
-    if format == "fp16":
-        return value.clamp(2**-24, 65504).half().float(), 16
-    if format == "bf16":
-        return value.bfloat16().float(), 16
-    if format == "fp8":
-        return value.clamp(2**-9, 448).to(torch.float8_e4m3fn).float(), 8
-    if format == "e8m0":
-        return torch.pow(2.0, value.clamp_min(2**-127).log2().round().clamp(-127, 127)), 8
-    raise ValueError(f"unsupported scale storage format {format!r}")
 
 
 class Scaled(Quantizer):
     def __init__(
         self,
         grid: Grid,
-        group: builtins.int | None = 128,
+        group: int | None = 128,
         scale: str | Callable[[Tensor], Tensor] = "absmax",
         scale_fmt: str | Grid = "fp16",
         asym: bool = False,
         *,
-        search_steps: builtins.int = 20,
+        search_steps: int = 20,
     ) -> None:
         if group is not None and group <= 0:
             raise ValueError("group must be positive or None")
@@ -123,9 +54,12 @@ class Scaled(Quantizer):
     def reconstruct_activations(self, value: Tensor) -> Tensor:
         """Reconstruct online scalar grids without codec allocation or host synchronization."""
         supported = (
-            value.is_cuda and self.grid.dim == 1 and self.grid.values is not None
-            and self.scale == "absmax" and isinstance(self.scale_fmt, str)
-            and self.scale_fmt in {"fp32", "fp16", "bf16", "fp8", "e8m0"}
+            value.is_cuda
+            and self.grid.dim == 1
+            and self.grid.values is not None
+            and self.scale == "absmax"
+            and isinstance(self.scale_fmt, str)
+            and self.scale_fmt in SCALE_FORMAT_BITS
         )
         if not supported:
             return self(value.float()).w.to(value.dtype)
@@ -136,17 +70,25 @@ class Scaled(Quantizer):
             values = self.grid.values.to(value.device).contiguous()
             self._activation_values[value.device] = values
         return reconstruct(
-            value.contiguous(), values, self.group or value.shape[1], self.scale_fmt, self.asym,
-            self.grid.name.startswith("int"), self._value_minimum, self._value_maximum,
+            value.contiguous(),
+            values,
+            self.group or value.shape[1],
+            self.scale_fmt,
+            self.asym,
+            self.grid.name.startswith("int"),
+            self._value_minimum,
+            self._value_maximum,
             self._value_absolute_maximum,
         )
 
-    def logical_bits(self, shape: tuple[builtins.int, builtins.int]) -> float:
+    def logical_bits(self, shape: tuple[int, int]) -> float:
         width = shape[1]
         group = min(self.group or width, width)
-        formats = {"fp32": 32, "fp16": 16, "bf16": 16, "fp8": 8, "e8m0": 8}
-        scale_bits = (self.scale_fmt.bits if isinstance(self.scale_fmt, Grid)
-                      else formats[self.scale_fmt])
+        scale_bits = (
+            self.scale_fmt.bits
+            if isinstance(self.scale_fmt, Grid)
+            else SCALE_FORMAT_BITS[self.scale_fmt]
+        )
         groups = shape[0] * ((width + group - 1) // group)
         return self.grid.bits * shape[0] * width / self.grid.dim + (
             scale_bits * groups * (2 if self.asym else 1)
@@ -238,7 +180,8 @@ class Scaled(Quantizer):
                         decode=decode_scaled,
                         codec="scaled",
                         metadata={
-                            "code_bits": self.grid.bits, "scale_fmt": self.scale_fmt,
+                            "code_bits": self.grid.bits,
+                            "scale_fmt": self.scale_fmt,
                             "trainable": ["scales"] + (["zero"] if zero is not None else []),
                         },
                     )
@@ -247,22 +190,27 @@ class Scaled(Quantizer):
                     raise ValueError("column slices must align to the vector grid dimension")
                 if values is not None:
                     vectors = normalized.reshape(-1, self.grid.dim)
-                    if self.grid.name == "e8p":
-                        from mlkit.quantization.lattice import nearest_e8p
-
+                    lattice = self.grid.name == "e8p"
+                    if lattice:
                         indices = nearest_e8p(vectors, return_indices=True)
                     else:
                         indices = nearest(vectors, values, return_indices=True)
                     return Q(
-                        codes=indices.reshape(value.shape[0], -1).to(torch.int32), bits=bits,
+                        codes=indices.reshape(value.shape[0], -1).to(torch.int32),
+                        bits=bits,
                         params={
-                            "scales": scales, "values": None if self.grid.name == "e8p" else
-                            values.to(value.device), "dim": self.grid.dim, "group": group,
-                            "offset": start, "zero": zero,
+                            "scales": scales,
+                            "values": None if lattice else values.to(value.device),
+                            "dim": self.grid.dim,
+                            "group": group,
+                            "offset": start,
+                            "zero": zero,
                         },
-                        decode=decode_vector_scaled, codec="vector_scaled",
+                        decode=decode_vector_scaled,
+                        codec="vector_scaled",
                         metadata={
-                            "code_bits": self.grid.bits, "scale_fmt": self.scale_fmt,
+                            "code_bits": self.grid.bits,
+                            "scale_fmt": self.scale_fmt,
                             "trainable": ["scales"],
                         },
                     )
@@ -281,26 +229,10 @@ class Scaled(Quantizer):
 
 def scaled(
     grid: Grid,
-    group: builtins.int | None = 128,
+    group: int | None = 128,
     scale: str | Callable[[Tensor], Tensor] = "absmax",
     scale_fmt: str | Grid = "fp16",
     asym: bool = False,
     **options: Any,
 ) -> Scaled:
     return Scaled(grid, group, scale, scale_fmt, asym, **options)
-
-
-def int(
-    bits: builtins.int = 4,
-    group: builtins.int | None = 128,
-    **options: Any,
-) -> Scaled:
-    return scaled(grid.int(bits), group=group, **options)
-
-
-def nf4(group: builtins.int | None = 64, **options: Any) -> Scaled:
-    return scaled(grid.values(NF4_VALUES, bits=4), group=group, **options)
-
-
-def mxfp4(group: builtins.int = 32, **options: Any) -> Scaled:
-    return scaled(grid.fp("e2m1"), group=group, scale_fmt="e8m0", **options)

@@ -11,6 +11,8 @@ from mlkit.quantization.context import Ctx
 from mlkit.quantization.grids import Grid
 from mlkit.quantization.representation import Q, as_q
 
+QuantizerFunction = Callable[[Tensor, Ctx], Q | Tensor]
+
 
 class FittedRounder:
     """A callable fitted format retaining optional native CUDA rounding information."""

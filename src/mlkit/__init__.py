@@ -4,7 +4,7 @@ from mlkit.experiments.data import DataSource, TokenBatches, data
 from mlkit.experiments.evaluation import PerplexityResult, Table, compare, eval, ppl, probe, sweep
 from mlkit.quantization.algorithms import awq, best_of, gptq, incoherent, ldlq, rtn
 from mlkit.quantization.context import Ctx
-from mlkit.quantization.formats import int, mxfp4, nf4, scaled
+from mlkit.quantization.formats import Trellis, int, mxfp4, nf4, scaled, trellis
 from mlkit.quantization.grids import grid
 from mlkit.quantization.operations import (
     absmax,
@@ -12,15 +12,17 @@ from mlkit.quantization.operations import (
     hadamard,
     kmeans,
     nearest,
+    one_mad,
+    pack,
     proxy_loss,
     rht,
     snap,
+    unpack,
+    viterbi,
 )
-from mlkit.quantization.packing import pack, unpack
 from mlkit.quantization.protocol import Quantizer, quantizer
 from mlkit.quantization.recipes import Recipe
 from mlkit.quantization.representation import Q
-from mlkit.quantization.trellis import Trellis, one_mad, trellis, viterbi
 from mlkit.runtime.engine import quantize
 from mlkit.runtime.inference import (
     BenchmarkResult,

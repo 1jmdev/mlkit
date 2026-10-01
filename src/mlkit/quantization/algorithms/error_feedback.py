@@ -1,33 +1,21 @@
-"""Composable calibration algorithms and changes of basis."""
+"""Hessian error feedback: GPTQ single-column and LDLQ block rounding."""
 
 import math
-from collections.abc import Callable
 from typing import Any
 
 import torch
 from torch import Tensor
 
 from mlkit.kernels.error_feedback import round_tile
-from mlkit.quantization.codecs import compose, deterministic_signs, registered
-from mlkit.quantization.context import Ctx, copy_cache, layer_seed
-from mlkit.quantization.formats import decode_feedback, decode_vector_scaled
-from mlkit.quantization.operations import proxy_loss
-from mlkit.quantization.protocol import FittedRounder, Quantizer, fit_quantizer
+from mlkit.quantization.codecs import decode_feedback, decode_trellis, decode_vector_scaled
+from mlkit.quantization.context import Ctx
+from mlkit.quantization.protocol import (
+    FittedRounder,
+    Quantizer,
+    QuantizerFunction,
+    fit_quantizer,
+)
 from mlkit.quantization.representation import Q, as_q
-from mlkit.quantization.rotations import structured_transform
-
-QuantizerFunction = Callable[[Tensor, Ctx], Q | Tensor]
-
-
-class RoundToNearest(Quantizer):
-    def __init__(self, inner: QuantizerFunction) -> None:
-        self.inner = inner
-
-    def __call__(self, w: Tensor, ctx: Ctx | None = None) -> Q:
-        return as_q(self.inner(w, ctx or Ctx(device=w.device)))
-
-    def __repr__(self) -> str:
-        return f"rtn({self.inner!r})"
 
 
 class ErrorFeedback(Quantizer):
@@ -223,8 +211,6 @@ class ErrorFeedback(Quantizer):
                 metadata=codec_metadata,
             )
         if trellis_parts and len(trellis_parts) == width // self.step:
-            from mlkit.quantization.trellis import decode_trellis
-
             parameters = trellis_parts[0].params | {
                 "shape": tuple(w.shape),
                 "initial_states": torch.cat([
@@ -243,183 +229,6 @@ class ErrorFeedback(Quantizer):
         return f"ldlq({self.inner!r}, step={self.step}, refit={self.refit})"
 
 
-class ActivationAware(Quantizer):
-    def __init__(self, inner: QuantizerFunction, *, grid: int = 20, shared: bool = False) -> None:
-        if grid < 1:
-            raise ValueError("AWQ search grid must be positive")
-        self.inner = inner
-        self.grid = grid
-        self.shared = shared
-
-    def __call__(self, w: Tensor, ctx: Ctx | None = None) -> Q:
-        ctx = ctx or Ctx(device=w.device)
-        siblings = ctx.siblings if self.shared and ctx.siblings else (ctx.name,)
-        group_key = (repr(self), siblings)
-        results = ctx.cache.setdefault("_mlkit_awq_results", {})
-        if self.shared and group_key in results:
-            result, additional_bits = results[group_key][ctx.name]
-            ctx.add_bits(additional_bits)
-            return result
-        modules = ctx.cache.get("_mlkit_sibling_modules", {})
-        algorithms = ctx.cache.get("_mlkit_layer_algorithms", {})
-        if len(siblings) > 1 and any(repr(algorithms.get(name)) != repr(self) for name in siblings):
-            raise ValueError("shared AWQ requires the same quantizer on every sibling projection")
-        weights = {name: w if name == ctx.name else modules[name].weight.detach().float()
-                   for name in siblings}
-        importance = ctx.act_absmean.to(w.device).clamp_min(1e-5)
-        hessian = ctx.H.to(w.device)
-        selected = None
-        minimum_loss = float("inf")
-        for alpha in torch.linspace(0, 1, self.grid).tolist():
-            scales = importance.pow(alpha)
-            scales /= (scales.max() * scales.min()).sqrt()
-            scales = scales.clamp(2**-24, 65504).half().float()
-            transformed_hessian = hessian / scales[:, None] / scales[None, :]
-            trial_cache = copy_cache(ctx.cache)
-            candidates = {}
-            loss = 0.0
-            for index, (name, weight) in enumerate(weights.items()):
-                scaled_context = ctx.replace(H=transformed_hessian, cache=trial_cache, name=name)
-                candidate = as_q(self.inner(weight * scales, scaled_context))
-                reconstruction = candidate.w / scales
-                if candidate.codes is not None and registered(candidate.codec):
-                    candidate = compose(candidate, "channel_scaled", {"channel_scales": scales})
-                    candidate.metadata["parameter_formats"]["channel_scales"] = "fp16"
-                else:
-                    candidate = Q(reconstruction, bits=candidate.bits)
-                candidates[name] = (
-                    candidate, scaled_context._additional_bits + (16 * scales.numel() if index == 0
-                                                                 else 0),
-                )
-                loss += float(proxy_loss(weight, reconstruction, ctx))
-            if loss < minimum_loss:
-                selected = candidates
-                minimum_loss = loss
-                selected_cache = trial_cache
-        assert selected is not None
-        ctx.cache.update(selected_cache)
-        if self.shared:
-            results[group_key] = selected
-        result, additional_bits = selected[ctx.name]
-        ctx.add_bits(additional_bits)
-        return result
-
-    def __repr__(self) -> str:
-        return f"awq({self.inner!r}, grid={self.grid}, shared={self.shared})"
-
-
-class Incoherent(Quantizer):
-    def __init__(
-        self,
-        inner: QuantizerFunction,
-        *,
-        left: str | None = "rht",
-        right: str | None = "rht",
-        train_signs: bool = False,
-    ) -> None:
-        if left not in {None, "rht"} or right not in {None, "rht"}:
-            raise ValueError("incoherence transforms must be rht or None")
-        self.inner = inner
-        self.left = left
-        self.right = right
-        self.train_signs = train_signs
-
-    def __call__(self, w: Tensor, ctx: Ctx | None = None) -> Q:
-        ctx = ctx or Ctx(device=w.device)
-        seed = layer_seed(ctx.name, ctx._seed) % 2**32
-        left_seed = seed if self.left else None
-        right_seed = (seed + 1) % 2**32 if self.right else None
-        left_signs = deterministic_signs(w.shape[0], seed, w.device) if self.left else None
-        right_signs = deterministic_signs(w.shape[1], seed + 1, w.device) if self.right else None
-        transformed = w.float()
-        if left_signs is not None:
-            transformed = structured_transform((transformed * left_signs[:, None]).T).T
-        if right_signs is not None:
-            transformed = structured_transform(transformed * right_signs)
-        transformed_context = ctx.replace()
-        if right_signs is not None:
-            original_provider = transformed_context._provider
-
-            def provider(name: str, fn: Callable | None, reduce: str) -> Tensor:
-                if name == "H":
-                    hessian = ctx.H.to(w.device) * right_signs[:, None] * right_signs[None, :]
-                    return structured_transform(structured_transform(hessian).T).T
-                if name == "X":
-                    return structured_transform(ctx.X.to(w.device) * right_signs)
-                inputs = structured_transform(ctx.X.to(w.device) * right_signs)
-                if name == "act_absmean":
-                    return inputs.abs().mean(0)
-                if name == "act_absmax":
-                    return inputs.abs().amax(0)
-                if fn is not None:
-                    return fn(inputs)
-                if original_provider is not None:
-                    return original_provider(name, fn, reduce)
-                raise KeyError(name)
-
-            transformed_context._stats = {}
-            transformed_context._provider = provider
-        quantized = as_q(self.inner(transformed, transformed_context))
-        ctx.add_bits(transformed_context._additional_bits)
-        if quantized.codes is not None and registered(quantized.codec):
-            result = compose(quantized, "basis", {
-                "shape": tuple(w.shape), "left_seed": left_seed, "right_seed": right_seed,
-                "left_signs": left_signs if self.train_signs else None,
-                "right_signs": right_signs if self.train_signs else None,
-            })
-            if self.train_signs:
-                for name, signs in [("left_signs", left_signs), ("right_signs", right_signs)]:
-                    if signs is not None:
-                        result.metadata["trainable"].append(name)
-                        result.metadata["parameter_formats"][name] = "fp16"
-                        ctx.add_bits(16 * signs.numel())
-            return result
-        if self.train_signs:
-            raise ValueError("trainable signs require an inner quantizer with a registered codec")
-        reconstruction = quantized.w
-        if right_signs is not None:
-            reconstruction = structured_transform(reconstruction, inverse=True) * right_signs
-        if left_signs is not None:
-            reconstruction = (
-                structured_transform(reconstruction.T, inverse=True).T * left_signs[:, None]
-            )
-        return Q(reconstruction, bits=quantized.bits)
-
-    def __repr__(self) -> str:
-        return f"incoherent({self.inner!r})"
-
-
-class BestOf(Quantizer):
-    def __init__(self, candidates: tuple[QuantizerFunction, ...], by: str = "proxy") -> None:
-        if not candidates or by not in {"proxy", "mse"}:
-            raise ValueError("best_of requires candidates and by='proxy' or 'mse'")
-        self.candidates = candidates
-        self.by = by
-
-    def __call__(self, w: Tensor, ctx: Ctx | None = None) -> Q:
-        ctx = ctx or Ctx(device=w.device)
-        selected = None
-        minimum_loss = float("inf")
-        base_bits, selected_bits = ctx._additional_bits, 0.0
-        for quantization in self.candidates:
-            candidate_context = ctx.replace(cache=copy_cache(ctx.cache))
-            candidate = as_q(quantization(w.clone(), candidate_context))
-            loss = float(proxy_loss(w, candidate.w, ctx if self.by == "proxy" else None))
-            if loss < minimum_loss:
-                selected, minimum_loss = candidate, loss
-                selected_bits = candidate_context._additional_bits
-                selected_cache = candidate_context.cache
-        ctx._additional_bits = base_bits + selected_bits
-        ctx.cache.clear()
-        ctx.cache.update(selected_cache)
-        assert selected is not None
-        return selected
-
-
-def rtn(inner: QuantizerFunction) -> RoundToNearest:
-    return RoundToNearest(inner)
-
-
 def ldlq(inner: QuantizerFunction, **options: Any) -> ErrorFeedback:
     return ErrorFeedback(inner, **options)
 
@@ -431,18 +240,9 @@ def gptq(
     **options: Any,
 ) -> ErrorFeedback:
     return ldlq(
-        inner, step=1, refit=refit,
-        order="activation" if act_order else "natural", **options,
+        inner,
+        step=1,
+        refit=refit,
+        order="activation" if act_order else "natural",
+        **options,
     )
-
-
-def awq(inner: QuantizerFunction, grid: int = 20, shared: bool = False) -> ActivationAware:
-    return ActivationAware(inner, grid=grid, shared=shared)
-
-
-def incoherent(inner: QuantizerFunction, **options: Any) -> Incoherent:
-    return Incoherent(inner, **options)
-
-
-def best_of(*candidates: QuantizerFunction, by: str = "proxy") -> BestOf:
-    return BestOf(candidates, by=by)

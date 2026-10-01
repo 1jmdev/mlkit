@@ -3,14 +3,13 @@
 import fnmatch
 import inspect
 import re
-from builtins import int as builtins_int
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 from mlkit.quantization.algorithms import awq, gptq
 from mlkit.quantization.context import Ctx
-from mlkit.quantization.formats import int, mxfp4, nf4
+from mlkit.quantization.formats import standard
 from mlkit.quantization.protocol import Quantizer
 
 
@@ -56,19 +55,19 @@ def preset(name: str) -> Recipe:
     match = re.fullmatch(r"(rtn|gptq|awq)-int([2-8])-g([1-9][0-9]*)", name)
     if match:
         method, bits, group = match.groups()
-        quantization: Quantizer = int(builtins_int(bits), group=builtins_int(group))
+        quantization: Quantizer = standard.int(int(bits), group=int(group))
         if method == "gptq":
-            quantization = gptq(quantization, refit=builtins_int(group))
+            quantization = gptq(quantization, refit=int(group))
         elif method == "awq":
             quantization = awq(quantization)
         return Recipe(weights=quantization, name=name)
     match = re.fullmatch(r"nf4-g([1-9][0-9]*)", name)
     if match:
-        return Recipe(weights=nf4(group=builtins_int(match[1])), name=name)
+        return Recipe(weights=standard.nf4(group=int(match[1])), name=name)
     if name == "mxfp4-g32":
-        return Recipe(weights=mxfp4(), name=name)
+        return Recipe(weights=standard.mxfp4(), name=name)
     if name == "rtn-w4a4":
-        return Recipe(weights=int(4), acts=int(4, group=None), name=name)
+        return Recipe(weights=standard.int(4), acts=standard.int(4, group=None), name=name)
     raise ValueError(
         f"unknown preset {name!r}; expected rtn-int4-g128, gptq-int4-g128, "
         "awq-int4-g128, nf4-g64, mxfp4-g32, or rtn-w4a4"

@@ -12,7 +12,7 @@ import torch.nn.functional as functional
 from torch import Tensor, nn
 
 from mlkit.kernels.packed_linear import decode, matrix_vector
-from mlkit.quantization.packing import pack
+from mlkit.quantization.operations import pack
 from mlkit.quantization.representation import Q
 from mlkit.runtime.engine import forward_batch, synchronize
 from mlkit.runtime.models import Model, QModel, preserve_input_processing

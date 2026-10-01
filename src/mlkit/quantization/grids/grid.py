@@ -1,4 +1,4 @@
-"""Scalar and vector representable sets, independent of scaling algorithms."""
+"""The grid protocol and the factory for built-in scalar, vector and lattice grids."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ from collections.abc import Callable
 import torch
 from torch import Tensor
 
-from mlkit.quantization.operations import nearest, snap
+from mlkit.quantization.grids.lattice import e8p_points, nearest_e8p
+from mlkit.quantization.operations.search import nearest, snap
+from mlkit.quantization.operations.trellis_search import one_mad, viterbi
 
 
 class Grid:
@@ -51,7 +53,9 @@ class GridFactory:
         values = torch.arange(minimum, maximum + 1, dtype=torch.float32)
         return Grid(
             lambda x: x.round().clamp(minimum, maximum),
-            bits, values=values, name=f"int{bits}",
+            bits,
+            values=values,
+            name=f"int{bits}",
         )
 
     def values(self, values: Tensor, *, bits: builtins.int | None = None) -> Grid:
@@ -78,8 +82,9 @@ class GridFactory:
 
     def fp(self, format: str) -> Grid:
         if format == "e2m1":
-            return self.values(torch.tensor([-6, -4, -3, -2, -1.5, -1, -0.5, 0,
-                                             0.5, 1, 1.5, 2, 3, 4, 6]), bits=4)
+            magnitudes = [0.5, 1, 1.5, 2, 3, 4, 6]
+            values = [-magnitude for magnitude in reversed(magnitudes)] + [0, *magnitudes]
+            return self.values(torch.tensor(values), bits=4)
         if format not in {"e3m2", "e2m3", "e4m3", "e5m2"}:
             raise ValueError(f"unsupported floating-point grid {format!r}")
         exponent_bits = builtins.int(format[1])
@@ -99,16 +104,16 @@ class GridFactory:
         )
 
     def e8p(self) -> Grid:
-        from mlkit.quantization.lattice import e8p_points, nearest_e8p
-
         return Grid(nearest_e8p, 16, 8, values=e8p_points(), name="e8p")
 
     def trellis(
-        self, L: builtins.int = 12, k: builtins.int = 2, *, dim: builtins.int = 256,
+        self,
+        L: builtins.int = 12,
+        k: builtins.int = 2,
+        *,
+        dim: builtins.int = 256,
         code: Callable | None = None,
     ) -> Grid:
-        from mlkit.quantization.trellis import one_mad, viterbi
-
         if not 1 <= k <= min(8, L) or not 1 <= L <= 16 or dim < 1:
             raise ValueError("invalid trellis state precision, transition precision, or dimension")
         codes = (code or one_mad)(torch.arange(2**L))

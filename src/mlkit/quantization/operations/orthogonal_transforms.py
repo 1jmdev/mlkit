@@ -6,7 +6,20 @@ import math
 import torch
 from torch import Tensor
 
-from mlkit.quantization.operations import hadamard
+
+def hadamard(value: Tensor, *, normalize: bool = True) -> Tensor:
+    """Fast Walsh-Hadamard transform along the final dimension."""
+    width = value.shape[-1]
+    if width <= 0 or width & (width - 1):
+        raise ValueError("hadamard currently requires a power-of-two final dimension")
+    output = value.clone()
+    stride = 1
+    while stride < width:
+        pairs = output.reshape(*value.shape[:-1], -1, 2, stride)
+        first, second = pairs[..., 0, :], pairs[..., 1, :]
+        output = torch.stack((first + second, first - second), dim=-2).reshape_as(value)
+        stride *= 2
+    return output / math.sqrt(width) if normalize else output
 
 
 def prime(value: int) -> bool:
@@ -88,6 +101,10 @@ def randomized_transform(value: Tensor, *, seed: int = 0, inverse: bool = False)
     generator = torch.Generator(device=value.device).manual_seed(seed)
     signs = torch.randint(2, (value.shape[-1],), generator=generator, device=value.device)
     signs = signs.to(value.dtype) * 2 - 1
-    return structured_transform(value, inverse=True) * signs if inverse else structured_transform(
-        value * signs
-    )
+    if inverse:
+        return structured_transform(value, inverse=True) * signs
+    return structured_transform(value * signs)
+
+
+def rht(value: Tensor, *, seed: int = 0, inverse: bool = False) -> Tensor:
+    return randomized_transform(value, seed=seed, inverse=inverse)

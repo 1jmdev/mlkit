@@ -1,15 +1,13 @@
-"""Named decoders and flattened composition for portable quantized representations."""
+"""Flattened composition of portable codecs with basis changes and channel scales."""
 
-from collections.abc import Callable
 from typing import Any
 
 import torch
 from torch import Tensor
 
-from mlkit.quantization.formats import decode_feedback, decode_scaled, decode_vector_scaled
+from mlkit.quantization.codecs.registry import codec, decoder, registered
+from mlkit.quantization.operations.orthogonal_transforms import structured_transform
 from mlkit.quantization.representation import Q
-from mlkit.quantization.rotations import structured_transform
-from mlkit.quantization.trellis import decode_trellis
 
 
 def deterministic_signs(width: int, seed: int, device: torch.device) -> Tensor:
@@ -21,6 +19,7 @@ def deterministic_signs(width: int, seed: int, device: torch.device) -> Tensor:
     return (values & 1).float() * 2 - 1
 
 
+@codec("basis")
 def decode_basis(
     codes: Tensor,
     *,
@@ -47,43 +46,16 @@ def decode_basis(
     return reconstruction
 
 
+@codec("channel_scaled")
 def decode_channel_scaled(
-    codes: Tensor, *, inner_codec: str, channel_scales: Tensor, **parameters: Any,
+    codes: Tensor,
+    *,
+    inner_codec: str,
+    channel_scales: Tensor,
+    **parameters: Any,
 ) -> Tensor:
     inner = {name.removeprefix("inner_"): value for name, value in parameters.items()}
     return decoder(inner_codec)(codes, **inner) / channel_scales
-
-
-_DECODERS: dict[str, Callable[..., Tensor]] = {
-    "scaled": decode_scaled,
-    "feedback": decode_feedback,
-    "trellis": decode_trellis,
-    "basis": decode_basis,
-    "channel_scaled": decode_channel_scaled,
-    "vector_scaled": decode_vector_scaled,
-    "vector_feedback": decode_vector_scaled,
-}
-
-
-def decoder(name: str) -> Callable[..., Tensor]:
-    if name not in _DECODERS:
-        raise ValueError(f"checkpoint requires registered codec {name!r}")
-    return _DECODERS[name]
-
-
-def codec(name: str) -> Callable[[Callable], Callable]:
-    """Register a decoder by name; checkpoints store its name rather than its code."""
-    def register(function: Callable[..., Tensor]) -> Callable:
-        if not name or name in _DECODERS:
-            raise ValueError(f"codec name {name!r} is empty or already registered")
-        _DECODERS[name] = function
-        return function
-
-    return register
-
-
-def registered(name: str | None) -> bool:
-    return name in _DECODERS
 
 
 def compose(quantized: Q, name: str, parameters: dict[str, Any]) -> Q:
@@ -100,10 +72,12 @@ def compose(quantized: Q, name: str, parameters: dict[str, Any]) -> Q:
     metadata["parameter_bits"] = {
         f"inner_{key}": value for key, value in metadata.get("parameter_bits", {}).items()
     }
+    inner_parameters = {f"inner_{key}": value for key, value in quantized.params.items()}
     return Q(
         codes=quantized.codes,
-        params={f"inner_{key}": value for key, value in quantized.params.items()} | {
-            "inner_codec": quantized.codec,
-        } | parameters,
-        decode=decoder(name), codec=name, bits=quantized.bits, metadata=metadata,
+        params=inner_parameters | {"inner_codec": quantized.codec} | parameters,
+        decode=decoder(name),
+        codec=name,
+        bits=quantized.bits,
+        metadata=metadata,
     )

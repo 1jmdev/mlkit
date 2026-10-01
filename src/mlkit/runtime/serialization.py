@@ -17,7 +17,7 @@ from torch import Tensor, nn
 from mlkit.quantization.codecs import codec as codec
 from mlkit.quantization.codecs import decoder, registered
 from mlkit.quantization.context import Ctx
-from mlkit.quantization.packing import pack, unpack
+from mlkit.quantization.operations import pack, unpack
 from mlkit.quantization.representation import Q
 from mlkit.runtime.models import BlockPassReport, LayerReport, QModel, weight_name
 from mlkit.runtime.online import install_activation_quantization, restore_quantizer
