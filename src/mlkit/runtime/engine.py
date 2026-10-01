@@ -13,6 +13,7 @@ from torch import Tensor, nn
 
 from mlkit.experiments.data import DataSource, TokenBatches, data, normalize_batches
 from mlkit.quantization.context import Ctx
+from mlkit.quantization.formats import Scaled
 from mlkit.quantization.operations import proxy_loss
 from mlkit.quantization.recipes import Recipe, normalize_recipe
 from mlkit.quantization.representation import as_q
@@ -252,8 +253,6 @@ def quantize(
     """Convert a separate model copy; statistics and datasets remain lazy."""
     source = model if isinstance(model, Model) else Model(model)
     definition: Recipe = normalize_recipe(recipe)
-    if definition.kv is not None:
-        raise NotImplementedError("KV quantization requires an architecture-specific cache adapter")
     converted_module = copy.deepcopy(source.module).eval()
     normalize_affine_layers(converted_module)
     converted = QModel(converted_module, source.tokenizer, name=source.name)
@@ -293,6 +292,7 @@ def quantize(
             for name, _ in layers
         }
         shared_cache["_mlkit_layer_algorithms"] = algorithms
+        activation_contexts = []
         for relative_name, layer in layers:
             name = f"{prefix}.{relative_name}".strip(".")
             context = contexts[name]
@@ -325,14 +325,28 @@ def quantize(
             if definition.acts is not None:
                 activation_quantizer = resolve_activation(definition.acts, name, context)
                 if activation_quantizer is not None:
+                    activation_context = Ctx(
+                        name, layer, block, index, provider=context._provider, cache=shared_cache,
+                        siblings=context.siblings, seed=seed, device=layer.weight.device,
+                    )
+                    activation_contexts.append(activation_context)
+                    with torch.no_grad():
+                        sample = torch.zeros(1, layer.in_features, device=layer.weight.device)
+                        as_q(activation_quantizer(sample, activation_context))
+
                     def quantize_inputs(
                         module: nn.Module,
                         arguments: tuple,
                         algorithm: Callable = activation_quantizer,
-                        layer_context: Ctx = context,
+                        layer_context: Ctx = activation_context,
                     ) -> tuple:
                         inputs = arguments[0]
                         shape = inputs.shape
+                        if isinstance(algorithm, Scaled):
+                            reconstruction = algorithm.reconstruct_activations(
+                                inputs.reshape(-1, shape[-1])
+                            )
+                            return (reconstruction.reshape(shape), *arguments[1:])
                         value = as_q(algorithm(
                             inputs.reshape(-1, shape[-1]).float(), layer_context
                         ))
@@ -350,11 +364,17 @@ def quantize(
             shared_cache.pop(key, None)
         if definition.acts is not None:
             original_block.to("cpu")
-            for context in contexts.values():
-                context._stats = {name: value.cpu() for name, value in context._stats.items()}
+            for activation_context in activation_contexts:
+                activation_context._provider = None
         del original_block, statistics, contexts
     for model_pass in definition.model_passes:
         model_pass(converted, session)
+    if definition.kv is not None:
+        from mlkit.runtime.cache import install_kv_quantization
+
+        converted.activation_handles.append(install_kv_quantization(
+            converted.module, definition.kv
+        ))
     return converted
 
 

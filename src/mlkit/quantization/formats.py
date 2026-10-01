@@ -113,6 +113,45 @@ class Scaled(Quantizer):
         self.scale_fmt = scale_fmt
         self.asym = asym
         self.search_steps = search_steps
+        self._activation_values: dict[torch.device, Tensor] = {}
+        values = None if grid.values is None or grid.dim != 1 else grid.values.detach().cpu()
+        self._value_minimum = 0.0 if values is None else float(values.min())
+        self._value_maximum = 0.0 if values is None else float(values.max())
+        self._value_absolute_maximum = 1.0 if values is None else float(values.abs().max())
+
+    def reconstruct_activations(self, value: Tensor) -> Tensor:
+        """Reconstruct online scalar grids without codec allocation or host synchronization."""
+        supported = (
+            value.is_cuda and self.grid.dim == 1 and self.grid.values is not None
+            and self.scale == "absmax" and isinstance(self.scale_fmt, str)
+            and self.scale_fmt in {"fp32", "fp16", "bf16", "fp8", "e8m0"}
+        )
+        if not supported:
+            return self(value.float()).w.to(value.dtype)
+        assert isinstance(self.scale_fmt, str)
+        from mlkit.runtime.kernels.activations import reconstruct
+
+        values = self._activation_values.get(value.device)
+        if values is None:
+            assert self.grid.values is not None
+            values = self.grid.values.to(value.device).contiguous()
+            self._activation_values[value.device] = values
+        return reconstruct(
+            value.contiguous(), values, self.group or value.shape[1], self.scale_fmt, self.asym,
+            self.grid.name.startswith("int"), self._value_minimum, self._value_maximum,
+            self._value_absolute_maximum,
+        )
+
+    def logical_bits(self, shape: tuple[builtins.int, builtins.int]) -> float:
+        width = shape[1]
+        group = min(self.group or width, width)
+        formats = {"fp32": 32, "fp16": 16, "bf16": 16, "fp8": 8, "e8m0": 8}
+        scale_bits = (self.scale_fmt.bits if isinstance(self.scale_fmt, Grid)
+                      else formats[self.scale_fmt])
+        groups = shape[0] * ((width + group - 1) // group)
+        return self.grid.bits * shape[0] * width / self.grid.dim + (
+            scale_bits * groups * (2 if self.asym else 1)
+        )
 
     def fit(self, w: Tensor, ctx: Ctx) -> Callable[[Tensor, slice], Q]:
         if w.ndim != 2 or not w.is_floating_point() or not torch.isfinite(w).all():
