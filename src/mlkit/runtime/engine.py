@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import time
+import weakref
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,6 +85,7 @@ class CalibrationSession:
         sample_rows: int,
         cache_dir: str | Path | None,
         need_targets: bool,
+        retain_history: bool = True,
     ) -> None:
         self.model = model
         self.calibration = calibration
@@ -91,6 +93,7 @@ class CalibrationSession:
         self.sample_rows = sample_rows
         self.cache_dir = cache_dir
         self.need_targets = need_targets
+        self.retain_history = retain_history
         self.calls: list[list[BlockCall]] | None = None
         self.targets: list[list[Tensor]] = [[] for _ in model.blocks]
         self.requirements: dict[str, tuple[Callable | None, str]] = {}
@@ -126,6 +129,16 @@ class CalibrationSession:
         assert self.batches is not None
         self.calls = [[] for _ in self.model.blocks]
         handles = []
+        host_tensors: dict[int, tuple[weakref.ReferenceType[Tensor], Tensor]] = {}
+
+        def transfer_to_host(tensor: Tensor) -> Tensor:
+            stored = host_tensors.get(id(tensor))
+            if stored is not None and stored[0]() is tensor:
+                return stored[1]
+            transferred = tensor.detach().cpu()
+            host_tensors[id(tensor)] = weakref.ref(tensor), transferred
+            return transferred
+
         for index, block in enumerate(self.model.blocks):
             def capture_inputs(
                 module: nn.Module,
@@ -134,20 +147,20 @@ class CalibrationSession:
                 block_index: int = index,
             ) -> None:
                 assert self.calls is not None
-                call = BlockCall(
-                    map_tensors(arguments, lambda tensor: tensor.detach().cpu()),
-                    map_tensors(keywords, lambda tensor: tensor.detach().cpu()),
-                )
+                call = BlockCall(arguments, keywords)
                 if self.sequential and block_index > 0 and not self.need_targets:
-                    call = call.with_hidden(torch.empty(0))
-                self.calls[block_index].append(call)
+                    call = call.with_hidden(torch.empty(0, device="cpu"))
+                self.calls[block_index].append(BlockCall(
+                    map_tensors(call.args, transfer_to_host),
+                    map_tensors(call.kwargs, transfer_to_host),
+                ))
 
             handles.append(block.register_forward_pre_hook(capture_inputs, with_kwargs=True))
             if self.need_targets:
                 def capture_targets(
                     module: nn.Module, arguments: tuple, output: Any, block_index: int = index,
                 ) -> None:
-                    self.targets[block_index].append(extract_hidden(output).detach().cpu())
+                    self.targets[block_index].append(transfer_to_host(extract_hidden(output)))
 
                 handles.append(block.register_forward_hook(capture_targets))
         try:
@@ -155,6 +168,7 @@ class CalibrationSession:
             self.model.module.eval()
             with torch.no_grad():
                 for batch in self.batches:
+                    host_tensors.clear()
                     forward_batch(self.model.module, batch)
         finally:
             for module, training in training_states:
@@ -174,6 +188,13 @@ class CalibrationSession:
             for sample, call in enumerate(self.calls[index]):
                 hidden = extract_hidden(call.run(block)).detach().cpu()
                 self.calls[index + 1][sample] = self.calls[index + 1][sample].with_hidden(hidden)
+
+    def release(self, index: int) -> None:
+        """Discard completed block data unless a model pass requires the history."""
+        if not self.retain_history:
+            if self.calls is not None:
+                self.calls[index] = []
+            self.targets[index] = []
 
 
 class BlockStatistics:
@@ -296,6 +317,7 @@ def quantize(
         calibration_model, calib, sequential=sequential, sample_rows=sample_rows,
         cache_dir=None if cache_dir is None else Path(cache_dir).expanduser(),
         need_targets=bool(definition.passes),
+        retain_history=bool(definition.model_passes),
     )
     if definition.passes or (definition.transforms and not sequential):
         session.prepare()
@@ -394,6 +416,7 @@ def quantize(
             for activation_context in activation_contexts:
                 activation_context._provider = None
         del original_block, statistics, contexts
+        session.release(index)
     for model_pass in definition.model_passes:
         model_pass(converted, session)
     if definition.kv is not None:
