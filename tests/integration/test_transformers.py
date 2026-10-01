@@ -32,6 +32,13 @@ def test_downloaded_llama_conversion(tmp_path, dtype: str) -> None:
     converted.save(tmp_path / "llama_checkpoint")
     restored = mk.load(tmp_path / "llama_checkpoint")
     assert restored.bpw == converted.bpw
+    assert restored.storage_bytes == converted.storage_bytes
+    assert restored.dtype == converted.dtype
+    tied = converted.module.lm_head.weight is converted.module.get_input_embeddings().weight
+    restored_tied = restored.module.lm_head.weight is restored.module.get_input_embeddings().weight
+    assert restored_tied == tied
+    assert all(parameter.is_cuda for parameter in restored.parameters())
+    assert not restored.module.training
     tokens = batches[0]["input_ids"]
     with torch.no_grad():
         torch.testing.assert_close(
