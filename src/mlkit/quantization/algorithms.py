@@ -228,31 +228,56 @@ class ActivationAware(Quantizer):
 
     def __call__(self, w: Tensor, ctx: Ctx | None = None) -> Q:
         ctx = ctx or Ctx(device=w.device)
+        siblings = ctx.siblings if self.shared and ctx.siblings else (ctx.name,)
+        group_key = (repr(self), siblings)
+        results = ctx.cache.setdefault("_mlkit_awq_results", {})
+        if self.shared and group_key in results:
+            result, additional_bits = results[group_key][ctx.name]
+            ctx.add_bits(additional_bits)
+            return result
+        modules = ctx.cache.get("_mlkit_sibling_modules", {})
+        algorithms = ctx.cache.get("_mlkit_layer_algorithms", {})
+        if len(siblings) > 1 and any(repr(algorithms.get(name)) != repr(self) for name in siblings):
+            raise ValueError("shared AWQ requires the same quantizer on every sibling projection")
+        weights = {name: w if name == ctx.name else modules[name].weight.detach().float()
+                   for name in siblings}
         importance = ctx.act_absmean.to(w.device).clamp_min(1e-5)
         hessian = ctx.H.to(w.device)
-        selected: Q | None = None
+        selected = None
         minimum_loss = float("inf")
-        selected_additional_bits = 0.0
-        base_bits = ctx._additional_bits
         for alpha in torch.linspace(0, 1, self.grid).tolist():
             scales = importance.pow(alpha)
             scales /= (scales.max() * scales.min()).sqrt()
-            scaled_context = ctx.replace(H=hessian / scales[:, None] / scales[None, :])
-            candidate = as_q(self.inner(w * scales, scaled_context))
-            reconstruction = candidate.w / scales
-            loss = float(proxy_loss(w, reconstruction, ctx))
+            scales = scales.clamp(2**-24, 65504).half().float()
+            transformed_hessian = hessian / scales[:, None] / scales[None, :]
+            trial_cache = dict(ctx.cache)
+            candidates = {}
+            loss = 0.0
+            for index, (name, weight) in enumerate(weights.items()):
+                scaled_context = ctx.replace(H=transformed_hessian, cache=trial_cache, name=name)
+                candidate = as_q(self.inner(weight * scales, scaled_context))
+                reconstruction = candidate.w / scales
+                if candidate.codes is not None and registered(candidate.codec):
+                    candidate = compose(candidate, "channel_scaled", {"channel_scales": scales})
+                    candidate.metadata["parameter_formats"]["channel_scales"] = "fp16"
+                else:
+                    candidate = Q(reconstruction, bits=candidate.bits)
+                candidates[name] = (
+                    candidate, scaled_context._additional_bits + (16 * scales.numel() if index == 0
+                                                                 else 0),
+                )
+                loss += float(proxy_loss(weight, reconstruction, ctx))
             if loss < minimum_loss:
-                selected = Q(reconstruction, bits=candidate.bits)
+                selected = candidates
                 minimum_loss = loss
-                selected_additional_bits = scaled_context._additional_bits
-        ctx._additional_bits = base_bits + selected_additional_bits
+                selected_cache = trial_cache
         assert selected is not None
+        ctx.cache.update(selected_cache)
         if self.shared:
-            raise NotImplementedError(
-                "shared AWQ requires joint sibling scale search; "
-                "use shared=False for per-layer research"
-            )
-        return selected
+            results[group_key] = selected
+        result, additional_bits = selected[ctx.name]
+        ctx.add_bits(additional_bits)
+        return result
 
     def __repr__(self) -> str:
         return f"awq({self.inner!r}, grid={self.grid}, shared={self.shared})"

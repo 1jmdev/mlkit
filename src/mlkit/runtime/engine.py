@@ -275,17 +275,28 @@ def quantize(
         statistics = BlockStatistics(session, original_block, index, prefix)
         for statistic, (function, reduction) in list(session.requirements.items()):
             statistics.collect(statistic, function, reduction)
+        layers = [(name, layer) for name, layer in block.named_modules()
+                  if isinstance(layer, nn.Linear)]
         contexts = {}
-        for relative_name, layer in list(block.named_modules()):
-            if not isinstance(layer, nn.Linear):
-                continue
+        sibling_groups = identify_siblings(layers, prefix)
+        for relative_name, layer in layers:
             name = f"{prefix}.{relative_name}".strip(".")
             context = Ctx(
                 name, layer, block, index, provider=statistics.provider(name, layer.weight.device),
                 cache=shared_cache, seed=seed, device=layer.weight.device,
+                siblings=sibling_groups.get(name, ()),
             )
             contexts[name] = context
-            quantization = definition.select(name, context)
+        algorithms = {name: definition.select(name, context) for name, context in contexts.items()}
+        shared_cache["_mlkit_sibling_modules"] = {
+            f"{prefix}.{name}".strip("."): original_block.get_submodule(name)
+            for name, _ in layers
+        }
+        shared_cache["_mlkit_layer_algorithms"] = algorithms
+        for relative_name, layer in layers:
+            name = f"{prefix}.{relative_name}".strip(".")
+            context = contexts[name]
+            quantization = algorithms[name]
             if quantization is None:
                 continue
             weight = layer.weight.detach().float()
@@ -335,6 +346,8 @@ def quantize(
 
             run_block_passes(converted, index, block, original_block, session, definition.passes)
         session.propagate(index, block)
+        for key in ["_mlkit_sibling_modules", "_mlkit_layer_algorithms", "_mlkit_awq_results"]:
+            shared_cache.pop(key, None)
         if definition.acts is not None:
             original_block.to("cpu")
             for context in contexts.values():
@@ -349,6 +362,21 @@ def resolve_activation(value: Any, name: str, context: Ctx) -> Any:
     if isinstance(value, Mapping):
         return Recipe(weights=value).select(name, context)
     return value
+
+
+def identify_siblings(
+    layers: list[tuple[str, nn.Linear]], prefix: str,
+) -> dict[str, tuple[str, ...]]:
+    """Identify projections known to consume the same transformer activations."""
+    groups: dict[tuple[str, str], list[str]] = {}
+    for name, _ in layers:
+        parent, _, field = name.rpartition(".")
+        family = "attention" if field in {"q_proj", "k_proj", "v_proj"} else (
+            "feedforward" if field in {"gate_proj", "up_proj"} else None
+        )
+        if family is not None:
+            groups.setdefault((parent, family), []).append(f"{prefix}.{name}".strip("."))
+    return {name: tuple(names) for names in groups.values() if len(names) > 1 for name in names}
 
 
 def normalize_affine_layers(model: nn.Module) -> None:
