@@ -182,6 +182,8 @@ class QModel(Model):
         self.quantized: dict[str, Q] = {}
         self.layer_reports: list[LayerReport] = []
         self.activation_handles: list[Any] = []
+        self.activation_specs: dict[str, dict[str, Any] | None] = {}
+        self.kv_spec: dict[str, Any] | None = None
         self.execution_backend = "dense"
 
     @property

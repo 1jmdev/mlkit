@@ -15,9 +15,11 @@ from torch import Tensor, nn
 
 from mlkit.quantization.codecs import codec as codec
 from mlkit.quantization.codecs import decoder, registered
+from mlkit.quantization.context import Ctx
 from mlkit.quantization.packing import pack, unpack
 from mlkit.quantization.representation import Q
 from mlkit.runtime.models import LayerReport, QModel
+from mlkit.runtime.online import install_activation_quantization, restore_quantizer
 
 FORMAT_VERSION = 1
 
@@ -26,10 +28,12 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
     destination = Path(path).resolve()
     if destination.exists() and not overwrite:
         raise FileExistsError(f"checkpoint destination already exists: {destination}")
-    if model.activation_handles:
+    if any(specification is None for specification in model.activation_specs.values()):
         raise ValueError(
-            "activation hooks need a serializable recipe; weight-only save is supported"
+            "custom online activation quantizers require an explicit deployment recipe"
         )
+    if getattr(model.module, "_mlkit_kv_quantizer", None) is not None and model.kv_spec is None:
+        raise ValueError("custom online KV quantizers require an explicit deployment recipe")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix="mlkit_checkpoint_", dir=destination.parent))
     try:
@@ -106,6 +110,7 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
             "logical_bpw": model.bpw, "model_bpw": model.model_bpw,
             "parameter_accounting": model._parameter_accounting,
             "transforms": getattr(model.module, "_mlkit_transforms", []),
+            "activations": model.activation_specs, "kv": model.kv_spec,
             "tensor_bytes": sum(value.numel() * value.element_size() for value in tensors.values()),
         }
         (temporary / "mlkit.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -187,6 +192,21 @@ def load_checkpoint(
         record_transform(model, descriptor)
     model.load_state_dict(state, strict=True)
     model.cuda().eval()
+    for name, specification in manifest.get("activations", {}).items():
+        module = model.get_submodule(name)
+        quantizer = restore_quantizer(specification)
+        context = Ctx(name, module, device=converted.device)
+        converted.activation_handles.append(install_activation_quantization(
+            module, quantizer, context
+        ))
+        converted.activation_specs[name] = specification
+    if manifest.get("kv") is not None:
+        from mlkit.runtime.cache import install_kv_quantization
+
+        converted.kv_spec = manifest["kv"]
+        converted.activation_handles.append(install_kv_quantization(
+            model, restore_quantizer(converted.kv_spec)
+        ))
     converted.layer_reports = [
         LayerReport(**(record | {"shape": tuple(record["shape"])}))
         for record in manifest["reports"]

@@ -59,3 +59,18 @@ def test_compiled_generation_uses_static_cache_without_mutating_source() -> None
     expected = model.generate(tokens, **options)
     result = compiled.generate(tokens, **options)
     assert torch.equal(result, expected)
+
+
+def test_online_scalar_formats_are_saved_and_restored(tmp_path) -> None:
+    model = create_model()
+    recipe = mk.Recipe(weights=mk.int(4, group=16), acts=mk.nf4(group=None),
+                       kv=mk.int(4, group=None))
+    converted = mk.quantize(model, recipe, calib=None)
+    tokens = torch.randint(128, (1, 7))
+    with torch.inference_mode():
+        expected = converted(tokens, use_cache=False).logits
+    converted.save(tmp_path / "online")
+    restored = mk.load(tmp_path / "online", model=create_model)
+    with torch.inference_mode():
+        torch.testing.assert_close(restored(tokens, use_cache=False).logits, expected,
+                                   rtol=0, atol=0)

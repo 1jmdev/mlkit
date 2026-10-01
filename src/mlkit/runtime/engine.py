@@ -13,7 +13,6 @@ from torch import Tensor, nn
 
 from mlkit.experiments.data import DataSource, TokenBatches, data, normalize_batches
 from mlkit.quantization.context import Ctx
-from mlkit.quantization.formats import Scaled
 from mlkit.quantization.operations import proxy_loss
 from mlkit.quantization.recipes import Recipe, normalize_recipe
 from mlkit.quantization.representation import as_q
@@ -25,6 +24,7 @@ from mlkit.runtime.models import (
     extract_hidden,
     module_device,
 )
+from mlkit.runtime.online import describe_quantizer, install_activation_quantization
 from mlkit.runtime.statistics import StatisticAccumulator, StatisticsCache, model_fingerprint
 
 
@@ -365,26 +365,9 @@ def quantize(
                         sample = torch.zeros(1, layer.in_features, device=layer.weight.device)
                         as_q(activation_quantizer(sample, activation_context))
 
-                    def quantize_inputs(
-                        module: nn.Module,
-                        arguments: tuple,
-                        algorithm: Callable = activation_quantizer,
-                        layer_context: Ctx = activation_context,
-                    ) -> tuple:
-                        inputs = arguments[0]
-                        shape = inputs.shape
-                        if isinstance(algorithm, Scaled):
-                            reconstruction = algorithm.reconstruct_activations(
-                                inputs.reshape(-1, shape[-1])
-                            )
-                            return (reconstruction.reshape(shape), *arguments[1:])
-                        value = as_q(algorithm(
-                            inputs.reshape(-1, shape[-1]).float(), layer_context
-                        ))
-                        return (value.w.reshape(shape).to(inputs.dtype), *arguments[1:])
-
-                    converted.activation_handles.append(layer.register_forward_pre_hook(
-                        quantize_inputs
+                    converted.activation_specs[name] = describe_quantizer(activation_quantizer)
+                    converted.activation_handles.append(install_activation_quantization(
+                        layer, activation_quantizer, activation_context
                     ))
         if definition.passes:
             from mlkit.runtime.passes import run_block_passes
@@ -406,6 +389,7 @@ def quantize(
         converted.activation_handles.append(install_kv_quantization(
             converted.module, definition.kv
         ))
+        converted.kv_spec = describe_quantizer(definition.kv)
     return converted
 
 
