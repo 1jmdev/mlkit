@@ -152,7 +152,10 @@ class Scaled(Quantizer):
                         params=parameters,
                         decode=decode_scaled,
                         codec="scaled",
-                        metadata={"code_bits": self.grid.bits, "scale_fmt": self.scale_fmt},
+                        metadata={
+                            "code_bits": self.grid.bits, "scale_fmt": self.scale_fmt,
+                            "trainable": ["scales"] + (["zero"] if zero is not None else []),
+                        },
                     )
             else:
                 if value.shape[1] % self.grid.dim:

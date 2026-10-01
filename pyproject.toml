@@ -15,6 +15,8 @@ dependencies = ["torch>=2.8", "safetensors>=0.5"]
 [project.optional-dependencies]
 transformers = ["transformers>=4.53,<6", "accelerate>=1.8"]
 torchao = ["torchao>=0.14,<0.18"]
+datasets = ["datasets>=3.6,<6"]
+evaluation = ["lm-eval>=0.4.9,<0.6"]
 
 [dependency-groups]
 dev = ["pytest>=8.3", "ruff>=0.11", "mypy>=1.15", "build>=1.2"]
@@ -42,4 +44,3 @@ python_version = "3.11"
 files = ["src/mlkit"]
 check_untyped_defs = true
 ignore_missing_imports = true
-

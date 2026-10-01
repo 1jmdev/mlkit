@@ -51,6 +51,21 @@ class Q:
     def __repr__(self) -> str:
         return f"Q(shape={tuple(self.w.shape)}, bits={self.bits}, codec={self.codec!r})"
 
+    def to(self, device: str, *, detach: bool = False) -> "Q":
+        def transfer(value: Any) -> Any:
+            if isinstance(value, Tensor):
+                tensor = value.detach() if detach else value
+                return tensor.to(device)
+            if isinstance(value, dict):
+                return {name: transfer(item) for name, item in value.items()}
+            return value
+
+        return Q(
+            transfer(self._weight), bits=self.bits, codes=transfer(self.codes),
+            params=transfer(self.params), decode=self.decode, codec=self.codec,
+            metadata=self.metadata,
+        )
+
 
 def as_q(value: Q | Tensor) -> Q:
     if isinstance(value, Q):

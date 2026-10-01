@@ -1,0 +1,233 @@
+"""Model wrappers and extensible architecture discovery."""
+
+from collections.abc import Callable, Sequence
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+import torch
+from torch import Tensor, nn
+
+from mlkit.representation import Q
+
+
+class ArchitectureAdapter:
+    """Access repeated blocks without coupling formats to a transformer family."""
+
+    def __init__(self, model: nn.Module, block_path: str | None = None) -> None:
+        self.model = model
+        self.block_path = block_path or self.discover_blocks(model)
+
+    @staticmethod
+    def discover_blocks(model: nn.Module) -> str | None:
+        for path in ("model.layers", "transformer.h", "gpt_neox.layers", "model.decoder.layers"):
+            try:
+                sequence = model.get_submodule(path)
+            except AttributeError:
+                continue
+            if isinstance(sequence, (nn.ModuleList, nn.Sequential)):
+                return path
+        return None
+
+    @property
+    def blocks(self) -> Sequence[nn.Module]:
+        if self.block_path is None:
+            return (self.model,)
+        return self.model.get_submodule(self.block_path)
+
+    def block_name(self, index: int) -> str:
+        return "" if self.block_path is None else f"{self.block_path}.{index}"
+
+    @property
+    def norms(self) -> list[nn.Module]:
+        return [
+            module for module in self.model.modules()
+            if isinstance(module, nn.LayerNorm) or "rmsnorm" in type(module).__name__.lower()
+        ]
+
+    @property
+    def residual_readers(self) -> list[nn.Linear]:
+        suffixes = {"q_proj", "k_proj", "v_proj", "gate_proj", "up_proj", "lm_head"}
+        return [
+            module for name, module in self.model.named_modules()
+            if isinstance(module, nn.Linear) and name.split(".")[-1] in suffixes
+        ]
+
+    @property
+    def residual_writers(self) -> list[nn.Linear]:
+        suffixes = {"o_proj", "down_proj"}
+        return [
+            module for name, module in self.model.named_modules()
+            if isinstance(module, nn.Linear) and name.split(".")[-1] in suffixes
+        ]
+
+
+_ADAPTER_FACTORIES: dict[str, Callable[[nn.Module], ArchitectureAdapter]] = {}
+
+
+def adapter(
+    model_type: str,
+) -> Callable[[Callable[[nn.Module], ArchitectureAdapter]], Callable]:
+    def register(factory: Callable[[nn.Module], ArchitectureAdapter]) -> Callable:
+        _ADAPTER_FACTORIES[model_type] = factory
+        return factory
+
+    return register
+
+
+def architecture_adapter(model: nn.Module) -> ArchitectureAdapter:
+    model_type = getattr(getattr(model, "config", None), "model_type", "")
+    factory = _ADAPTER_FACTORIES.get(model_type, ArchitectureAdapter)
+    return factory(model)
+
+
+@dataclass
+class LayerReport:
+    name: str
+    shape: tuple[int, int]
+    bits: float | None
+    elements: int
+    loss: float
+    seconds: float
+    method: str
+
+    @property
+    def bpw(self) -> float | None:
+        return None if self.bits is None else self.bits / self.elements
+
+
+class Model(nn.Module):
+    def __init__(
+        self,
+        module: nn.Module,
+        tokenizer: Any = None,
+        *,
+        name: str | None = None,
+        architecture: ArchitectureAdapter | None = None,
+    ) -> None:
+        super().__init__()
+        self.module = module
+        self.tokenizer = tokenizer
+        self.name = name or type(module).__name__
+        self.architecture = architecture or architecture_adapter(module)
+
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        return self.module(*args, **kwargs)
+
+    def generate(self, *args: Any, **kwargs: Any) -> Any:
+        return self.module.generate(*args, **kwargs)
+
+    @property
+    def device(self) -> torch.device:
+        return next(self.module.parameters()).device
+
+    @property
+    def dtype(self) -> torch.dtype:
+        return next(self.module.parameters()).dtype
+
+    @property
+    def config(self) -> Any:
+        return self.module.config
+
+    @property
+    def blocks(self) -> Sequence[nn.Module]:
+        return self.architecture.blocks
+
+    @property
+    def residual_readers(self) -> list[nn.Linear]:
+        return self.architecture.residual_readers
+
+    @property
+    def residual_writers(self) -> list[nn.Linear]:
+        return self.architecture.residual_writers
+
+    @property
+    def norms(self) -> list[nn.Module]:
+        return self.architecture.norms
+
+
+class QModel(Model):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.quantized: dict[str, Q] = {}
+        self.layer_reports: list[LayerReport] = []
+        self.activation_handles: list[Any] = []
+        self.execution_backend = "dense"
+
+    @property
+    def bpw(self) -> float | None:
+        if not self.layer_reports:
+            return None
+        if any(record.bits is None for record in self.layer_reports):
+            return None
+        bits = sum(record.bits for record in self.layer_reports if record.bits is not None)
+        return bits / sum(record.elements for record in self.layer_reports)
+
+    @property
+    def model_bpw(self) -> float | None:
+        """Include untouched embeddings, output heads, norms, and biases."""
+        if self.bpw is None:
+            return None
+        selected = {f"{record.name}.weight" for record in self.layer_reports}
+        original_bits = 0
+        original_elements = 0
+        for name, parameter in self.module.named_parameters():
+            original_elements += parameter.numel()
+            if name not in selected:
+                original_bits += parameter.numel() * parameter.element_size() * 8
+        quantized_bits = sum(
+            record.bits for record in self.layer_reports if record.bits is not None
+        )
+        return (original_bits + quantized_bits) / original_elements
+
+    def report(self, *, print_table: bool = True) -> list[dict[str, Any]]:
+        records = [asdict(record) | {"bpw": record.bpw} for record in self.layer_reports]
+        if print_table:
+            print(f"{'layer':58} {'bpw':>7} {'loss':>12} {'seconds':>9}")
+            for record in self.layer_reports:
+                precision = "?" if record.bpw is None else f"{record.bpw:.3f}"
+                print(f"{record.name:58} {precision:>7} {record.loss:12.5g} {record.seconds:9.3f}")
+        return records
+
+    def save(self, path: str | Path, **options: Any) -> None:
+        from mlkit.serialization import save
+
+        save(self, path, **options)
+
+
+def resolve_device(device: str | torch.device) -> torch.device:
+    if device == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device)
+
+
+def load(
+    name: str | Path,
+    dtype: str | torch.dtype = "auto",
+    device: str | torch.device = "auto",
+    **options: Any,
+) -> Model:
+    path = Path(name)
+    if (path / "mlkit.json").is_file():
+        from mlkit.serialization import load_checkpoint
+
+        return load_checkpoint(path, device=device, **options)
+    try:
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except ImportError as error:
+        raise ImportError("Hugging Face loading requires uv add 'mlkit[transformers]'") from error
+    selected_dtype = getattr(torch, dtype) if isinstance(dtype, str) and dtype != "auto" else dtype
+    module = AutoModelForCausalLM.from_pretrained(str(name), dtype=selected_dtype, **options)
+    module.to(resolve_device(device)).eval()
+    tokenizer = AutoTokenizer.from_pretrained(str(name), trust_remote_code=False)
+    return Model(module, tokenizer, name=str(name))
+
+
+def extract_hidden(output: Any) -> Tensor:
+    if isinstance(output, Tensor):
+        return output
+    if isinstance(output, (tuple, list)):
+        return output[0]
+    if hasattr(output, "last_hidden_state"):
+        return output.last_hidden_state
+    raise TypeError("block output must be a tensor, tuple, or last_hidden_state result")
