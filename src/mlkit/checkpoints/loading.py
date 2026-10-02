@@ -68,6 +68,9 @@ def load_checkpoint(
         with torch.no_grad():
             state[weight_name(name)] = quantized.w.to(dtype)
         quantized_layers[name] = quantized.to("cpu", detach=True)
+    tied_weights = manifest.get("tied_weights", {})
+    for parameter_name, layer_name in tied_weights.items():
+        state[parameter_name] = state[weight_name(layer_name)]
     del tensors
     for descriptor in manifest.get("transforms", []):
         install_transform(module, descriptor, state)
@@ -81,6 +84,7 @@ def load_checkpoint(
     module.cuda().eval()
     converted = QModel(module, tokenizer, name=manifest["name"])
     converted.quantized = quantized_layers
+    converted.tied_weights = dict(tied_weights)
     for name, specification in manifest.get("activations", {}).items():
         target = module.get_submodule(name)
         quantizer = restore_quantizer(specification)

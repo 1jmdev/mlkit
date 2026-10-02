@@ -99,7 +99,7 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
                 reconstruction = quantized.w.detach().cpu()
                 tensors[f"{name}.reconstruction"] = reconstruction.contiguous()
                 layers[name] = {"codec": None, "bits": quantized.bits}
-        omitted = {weight_name(name) for name in model.quantized}
+        omitted = {weight_name(name) for name in model.quantized} | set(model.tied_weights)
         state_storages: dict[tuple, str] = {}
         state_aliases = {}
         for name, value in model.module.state_dict().items():
@@ -134,6 +134,7 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
             "transforms": getattr(model.module, "_mlkit_transforms", []),
             "activations": model.activation_specs, "kv": model.kv_spec,
             "state_aliases": state_aliases,
+            "tied_weights": model.tied_weights,
             "tensor_bytes": sum(value.numel() * value.element_size() for value in tensors.values()),
         }
         (temporary / MANIFEST_FILE).write_text(json.dumps(manifest, indent=2) + "\n")
