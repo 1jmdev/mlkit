@@ -2,7 +2,7 @@ import torch
 from torch import nn
 
 import mlkit as mk
-from mlkit.calibration import StatisticAccumulator, limit_token_energy
+from mlkit.calibration import StatisticAccumulator, limit_token_energy, statistics
 
 
 def test_token_energy_limit_scales_only_outlier_rows() -> None:
@@ -40,6 +40,35 @@ def test_hessian_accumulates_in_place_across_batches() -> None:
     rows = torch.cat(batches)
     torch.testing.assert_close(accumulator.result(), rows.T @ rows / len(rows))
     assert accumulator.result() is accumulator.result()
+
+
+def test_wide_hessian_is_assembled_from_upper_blocks() -> None:
+    width = 2 * statistics.SECOND_MOMENT_BLOCK + 76
+    batches = [torch.randn(48, width) for _ in range(2)]
+    accumulator = StatisticAccumulator("H")
+    for batch in batches:
+        accumulator.update(batch)
+    rows = torch.cat(batches)
+    result = accumulator.result()
+    assert torch.equal(result, result.T)
+    torch.testing.assert_close(result, rows.T @ rows / len(rows), rtol=1e-4, atol=1e-5)
+
+
+def test_half_precision_hessian_stays_within_factorization_error(monkeypatch) -> None:
+    width = statistics.SECOND_MOMENT_BLOCK + 128
+    inputs = (torch.randn(512, width) * torch.rand(width).mul(4).exp()).half()
+    reference = inputs.double().T @ inputs.double() / len(inputs)
+    magnitudes = reference.diagonal().sqrt()
+    errors = []
+    for tensor_float in (True, False):
+        monkeypatch.setattr(statistics, "TENSOR_FLOAT_PRODUCTS", tensor_float)
+        accumulator = StatisticAccumulator("H")
+        accumulator.update(inputs)
+        difference = (accumulator.result().double() - reference).abs()
+        errors.append(float((difference / (magnitudes[:, None] * magnitudes[None, :])).max()))
+    assert errors[0] < 2e-4
+    assert errors[1] < 2e-5
+    assert not torch.backends.cuda.matmul.allow_tf32
 
 
 def test_outlier_tokens_do_not_dominate_calibrated_hessians() -> None:

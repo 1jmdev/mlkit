@@ -8,6 +8,15 @@ from torch import Tensor, nn
 from mlkit.calibration.session import CalibrationSession
 from mlkit.models.architecture import identify_siblings
 
+# Columns per block of the symmetric second-moment product.
+SECOND_MOMENT_BLOCK = 512
+# Half-precision activations fit the TF32 significand, so their second moments are
+# multiplied on tensor cores. The result differs from the FP32 product by a few parts in
+# 100,000, below the error of the FP32 factorization that consumes a Hessian and far
+# below its damping. Set to False to multiply every second moment in FP32.
+TENSOR_FLOAT_PRODUCTS = True
+HALF_PRECISION_DTYPES = {torch.float16, torch.bfloat16}
+
 
 def limit_token_energy(inputs: Tensor, limit: float | None) -> Tensor:
     """Scale down rows whose energy exceeds ``limit`` times the median row energy.
@@ -24,6 +33,33 @@ def limit_token_energy(inputs: Tensor, limit: float | None) -> Tensor:
     if threshold <= 0 or not bool((energy > threshold).any()):
         return inputs
     return inputs * (threshold / energy).clamp_max(1).sqrt()[:, None]
+
+
+def add_upper_second_moment(total: Tensor, inputs: Tensor, *, tensor_float: bool) -> None:
+    """Add ``inputsᵀ inputs`` to the blocks of ``total`` on and above its block diagonal.
+
+    The product is symmetric, so the blocks below the diagonal are never computed;
+    ``mirror_upper_blocks`` fills them once after the last batch. This costs a little
+    more than half of the arithmetic of the full product. ``tensor_float`` permits
+    TF32 products, for inputs that hold half-precision values.
+    """
+    width = inputs.shape[1]
+    allowed = torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = tensor_float and TENSOR_FLOAT_PRODUCTS
+    try:
+        for start in range(0, width, SECOND_MOMENT_BLOCK):
+            stop = min(width, start + SECOND_MOMENT_BLOCK)
+            total[start:stop, start:].addmm_(inputs[:, start:stop].T, inputs[:, start:])
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = allowed
+
+
+def mirror_upper_blocks(total: Tensor) -> None:
+    """Copy the blocks above the block diagonal of ``total`` to their transposed positions."""
+    width = total.shape[0]
+    for start in range(0, width, SECOND_MOMENT_BLOCK):
+        stop = min(width, start + SECOND_MOMENT_BLOCK)
+        total[stop:, start:stop] = total[start:stop, stop:].T
 
 
 class StatisticAccumulator:
@@ -45,9 +81,16 @@ class StatisticAccumulator:
         self.samples: list[Tensor] = []
         self.finalized = False
 
-    def update(self, inputs: Tensor) -> None:
+    def update(self, inputs: Tensor, *, half_precision: bool | None = None) -> None:
+        """Accumulate one batch of layer inputs.
+
+        ``half_precision`` states that the values originate from half-precision
+        activations; by default it is inferred from the dtype of ``inputs``.
+        """
         if self.finalized:
             raise RuntimeError("a finalized statistic cannot accumulate further inputs")
+        if half_precision is None:
+            half_precision = inputs.dtype in HALF_PRECISION_DTYPES
         inputs = inputs.detach().reshape(-1, inputs.shape[-1]).float()
         rows = inputs.shape[0]
         if self.name == "X":
@@ -59,9 +102,9 @@ class StatisticAccumulator:
             return
         if self.name == "H":
             if self.total is None:
-                self.total = inputs.T @ inputs
-            else:
-                self.total.addmm_(inputs.T, inputs)
+                width = inputs.shape[1]
+                self.total = torch.zeros((width, width), device=inputs.device)
+            add_upper_second_moment(self.total, inputs, tensor_float=half_precision)
             self.rows += rows
             return
         if self.name == "act_absmean":
@@ -93,6 +136,8 @@ class StatisticAccumulator:
         averaged = self.name in {"H", "act_absmean"} or (
             self.reduction == "mean" and self.name != "act_absmax"
         )
+        if self.name == "H" and not self.finalized:
+            mirror_upper_blocks(self.total)
         if averaged and not self.finalized:
             self.total.div_(self.rows)
         self.finalized = True
@@ -160,10 +205,11 @@ class BlockStatistics:
                 arguments: tuple,
                 collectors: list[StatisticAccumulator] = collectors,
             ) -> None:
+                half_precision = arguments[0].dtype in HALF_PRECISION_DTYPES
                 inputs = arguments[0].detach().reshape(-1, arguments[0].shape[-1]).float()
                 inputs = limit_token_energy(inputs, session.token_energy_limit)
                 for collector in collectors:
-                    collector.update(inputs)
+                    collector.update(inputs, half_precision=half_precision)
 
             handles.append(module.register_forward_pre_hook(observe))
         try:
