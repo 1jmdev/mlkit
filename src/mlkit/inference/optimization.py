@@ -20,8 +20,8 @@ def optimize(
 ) -> Model:
     """Preserve reconstructions while choosing dense or packed execution.
 
-    Packed execution supports scalar four-bit Q codecs. Other formats remain
-    dense. TorchAO exports are a separate operation because they requantize.
+    Packed execution supports scalar Q codecs of one to eight bits. Other formats
+    remain dense. TorchAO exports are a separate operation because they requantize.
     """
     if backend not in {"auto", "dense", "packed"}:
         raise ValueError("backend must be auto, dense, or packed")

@@ -20,6 +20,10 @@ def nf4() -> mk.Quantizer:
     return mk.nf4(group=64)
 
 
+def integer(bits: int) -> Callable[[], mk.Quantizer]:
+    return lambda: mk.int(bits, group=128)
+
+
 def linear(
     shape: tuple[int, int],
     batch: int,
@@ -99,6 +103,12 @@ def cases() -> list[Case]:
     for label in ("attention", "contraction"):
         shape = LLAMA_SHAPES[label]
         selected.append(linear_case("nf4", nf4, "llama", label, shape, 1, "packed"))
+    for bits in (2, 3, 6, 8):
+        for label in ("attention", "contraction"):
+            shape = LLAMA_SHAPES[label]
+            selected.append(
+                linear_case(f"int{bits}", integer(bits), "llama", label, shape, 1, "packed")
+            )
     stack_elements = 16 * (2048 * 2048 + 2 * 8192 * 2048)
     for batch in (1, 4, 8, 32):
         for backend in ("dense", "packed"):

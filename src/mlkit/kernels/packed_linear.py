@@ -1,20 +1,27 @@
-"""Fused four-bit scalar-grid decoding and matrix-vector multiplication.
+"""Fused scalar-grid decoding and matrix-vector multiplication of packed codes.
 
-Both kernels read every packed byte once, yielding two codes, and process whole
-byte tiles that lie inside one scale group, so each scale is loaded once per
-tile instead of once per element. Layer dimensions are runtime arguments without
-value or alignment specialization, which lets one compiled kernel serve every
-layer and be launched directly.
+Codes of one to eight bits are stored as a little-endian bit stream. The stream
+repeats with a period of one word: the fewest whole bytes that hold a whole
+number of codes, for example one byte and two codes at four bits, or three
+bytes and eight codes at three bits. Both kernels assemble every word once and
+process tiles of words that lie inside one scale group, so each scale is loaded
+once per tile instead of once per element. Layer dimensions are runtime
+arguments without value or alignment specialization, which lets one compiled
+kernel serve every layer and be launched directly.
 """
+
+import math
+from dataclasses import dataclass
 
 import triton
 import triton.language as tl
 from torch import Tensor
 
 ROW_TILE = 8
-MAXIMUM_TILE_BYTES = 64
-MINIMUM_TILE_BYTES = 8
+MAXIMUM_TILE_CODES = 128
+MINIMUM_TILE_CODES = 16
 MAXIMUM_SAMPLE_TILE = 8
+MAXIMUM_CODE_BITS = 8
 
 RUNTIME_ARGUMENTS = [
     "inputs",
@@ -33,17 +40,68 @@ RUNTIME_ARGUMENTS = [
 ]
 
 
-def tile_bytes_for(input_width: int, group: int) -> int | None:
-    """Bytes per kernel tile, or ``None`` when rows or groups are not byte aligned.
+@dataclass(frozen=True)
+class PackedLayout:
+    """The word structure of a packed code stream and the kernel tile it permits."""
 
-    Two codes share a byte, so rows and scale groups must contain an even number
-    of codes. A tile is the largest power-of-two byte count dividing a group.
+    bits: int
+    bytes_per_word: int
+    codes_per_word: int
+    tile_words: int
+
+    @property
+    def tile_codes(self) -> int:
+        return self.tile_words * self.codes_per_word
+
+    def row_bytes(self, input_width: int) -> int:
+        return input_width // self.codes_per_word * self.bytes_per_word
+
+    def tiles_per_row(self, input_width: int) -> int:
+        return triton.cdiv(input_width, self.tile_codes)
+
+
+def layout_for(bits: int, input_width: int, group: int) -> PackedLayout | None:
+    """The layout of a layer, or ``None`` when rows or scale groups split a word.
+
+    A tile is the largest power-of-two count of words dividing a scale group.
     """
-    if input_width % 2 or group % 2:
+    if not 1 <= bits <= MAXIMUM_CODE_BITS:
         return None
-    group_bytes = group // 2
-    tile_bytes = min(MAXIMUM_TILE_BYTES, group_bytes & -group_bytes)
-    return tile_bytes if tile_bytes >= MINIMUM_TILE_BYTES else None
+    divisor = math.gcd(bits, 8)
+    bytes_per_word = bits // divisor
+    codes_per_word = 8 // divisor
+    if input_width % codes_per_word or group % codes_per_word:
+        return None
+    group_words = group // codes_per_word
+    tile_words = min(MAXIMUM_TILE_CODES // codes_per_word, group_words & -group_words)
+    if tile_words * codes_per_word < MINIMUM_TILE_CODES:
+        return None
+    return PackedLayout(bits, bytes_per_word, codes_per_word, tile_words)
+
+
+@triton.jit
+def packed_words(
+    packed,
+    row_starts,
+    word_positions,
+    valid,
+    bytes_per_word: tl.constexpr,
+):
+    """Assemble the words at ``word_positions`` of every row from their bytes."""
+    byte_positions = row_starts[:, None] + (word_positions * bytes_per_word)[None, :]
+    if bytes_per_word > 4:
+        words = tl.load(packed + byte_positions, valid, other=0).to(tl.int64)
+        for byte in tl.static_range(1, bytes_per_word):
+            words |= tl.load(packed + byte_positions + byte, valid, other=0).to(tl.int64) << (
+                8 * byte
+            )
+    else:
+        words = tl.load(packed + byte_positions, valid, other=0).to(tl.int32)
+        for byte in tl.static_range(1, bytes_per_word):
+            words |= tl.load(packed + byte_positions + byte, valid, other=0).to(tl.int32) << (
+                8 * byte
+            )
+    return words
 
 
 @triton.jit(do_not_specialize=RUNTIME_ARGUMENTS, do_not_specialize_on_alignment=RUNTIME_ARGUMENTS)
@@ -67,50 +125,45 @@ def packed_matrix_vector(
     grid_minimum: tl.constexpr,
     grid_step: tl.constexpr,
     row_tile: tl.constexpr,
-    tile_bytes: tl.constexpr,
+    code_bits: tl.constexpr,
+    bytes_per_word: tl.constexpr,
+    codes_per_word: tl.constexpr,
+    tile_words: tl.constexpr,
     sample_tile: tl.constexpr,
 ):
     rows = tl.program_id(0) * row_tile + tl.arange(0, row_tile)
     sample_indices = tl.program_id(1) * sample_tile + tl.arange(0, sample_tile)
     row_valid = rows < output_width
     sample_valid = sample_indices < samples
-    offsets = tl.arange(0, tile_bytes)
-    row_bytes = input_width // 2
-    row_starts = rows.to(tl.int64) * row_bytes
+    offsets = tl.arange(0, tile_words)
+    row_words = input_width // codes_per_word
+    row_starts = rows.to(tl.int64) * (row_words * bytes_per_word)
     input_starts = sample_indices.to(tl.int64) * input_width
-    accumulator = tl.zeros((sample_tile, row_tile, tile_bytes), dtype=tl.float32)
+    accumulator = tl.zeros((sample_tile, row_tile, tile_words), dtype=tl.float32)
     for tile in range(tiles_per_row):
-        byte_positions = tile * tile_bytes + offsets
-        valid = byte_positions < row_bytes
-        codes = tl.load(
-            packed + row_starts[:, None] + byte_positions[None, :],
-            row_valid[:, None] & valid[None, :],
-            other=0,
+        word_positions = tile * tile_words + offsets
+        valid = word_positions < row_words
+        words = packed_words(
+            packed, row_starts, word_positions, row_valid[:, None] & valid[None, :], bytes_per_word
         )
-        low = (codes & 15).to(tl.int32)
-        high = (codes >> 4).to(tl.int32)
-        if uniform_grid:
-            low_weights = grid_minimum + low.to(tl.float32) * grid_step
-            high_weights = grid_minimum + high.to(tl.float32) * grid_step
-        else:
-            low_weights = tl.load(values + low)
-            high_weights = tl.load(values + high)
-        scale_indices = rows * groups_per_row + (2 * tile * tile_bytes) // group_width
+        scale_indices = rows * groups_per_row + (tile * tile_words * codes_per_word) // group_width
         scale = tl.load(scales + scale_indices, row_valid, other=0).to(tl.float32)
-        low_weights = low_weights * scale[:, None]
-        high_weights = high_weights * scale[:, None]
         if has_zero:
             zero = tl.load(zeros + scale_indices, row_valid, other=0).to(tl.float32)
-            low_weights += zero[:, None]
-            high_weights += zero[:, None]
-        # Positions beyond a row or a sample read zero inputs and contribute nothing.
         input_valid = sample_valid[:, None] & valid[None, :]
-        input_positions = inputs + input_starts[:, None] + 2 * byte_positions[None, :]
-        even = tl.load(input_positions, input_valid, other=0).to(tl.float32)
-        odd = tl.load(input_positions + 1, input_valid, other=0).to(tl.float32)
-        accumulator += (
-            low_weights[None, :, :] * even[:, None, :] + high_weights[None, :, :] * odd[:, None, :]
-        )
+        code_positions = word_positions * codes_per_word
+        input_positions = inputs + input_starts[:, None] + code_positions[None, :]
+        for code in tl.static_range(codes_per_word):
+            codes = ((words >> (code * code_bits)) & ((1 << code_bits) - 1)).to(tl.int32)
+            if uniform_grid:
+                weights = grid_minimum + codes.to(tl.float32) * grid_step
+            else:
+                weights = tl.load(values + codes)
+            weights = weights * scale[:, None]
+            if has_zero:
+                weights += zero[:, None]
+            operands = tl.load(input_positions + code, input_valid, other=0).to(tl.float32)
+            accumulator += weights[None, :, :] * operands[:, None, :]
     result = tl.sum(accumulator, axis=2)
     if has_bias:
         result += tl.load(bias + rows, row_valid, other=0).to(tl.float32)[None, :]
@@ -134,7 +187,7 @@ def matrix_vector(
     bias: Tensor | None,
     output: Tensor,
     group: int,
-    tile_bytes: int,
+    layout: PackedLayout,
     *,
     uniform_grid: bool = False,
     grid_minimum: float = 0.0,
@@ -157,7 +210,7 @@ def matrix_vector(
         output_width,
         scales.shape[1],
         group,
-        triton.cdiv(input_width // 2, tile_bytes),
+        layout.tiles_per_row(input_width),
         samples,
         zeros is not None,
         bias is not None,
@@ -165,7 +218,10 @@ def matrix_vector(
         grid_minimum,
         grid_step,
         ROW_TILE,
-        tile_bytes,
+        layout.bits,
+        layout.bytes_per_word,
+        layout.codes_per_word,
+        layout.tile_words,
         sample_tile,
     )
 
@@ -187,37 +243,37 @@ def decode_rows(
     grid_minimum: tl.constexpr,
     grid_step: tl.constexpr,
     row_tile: tl.constexpr,
-    tile_bytes: tl.constexpr,
+    code_bits: tl.constexpr,
+    bytes_per_word: tl.constexpr,
+    codes_per_word: tl.constexpr,
+    tile_words: tl.constexpr,
 ):
     rows = tl.program_id(0) * row_tile + tl.arange(0, row_tile)
     row_valid = rows < output_width
-    offsets = tl.arange(0, tile_bytes)
-    row_bytes = input_width // 2
-    packed_starts = rows.to(tl.int64) * row_bytes
+    offsets = tl.arange(0, tile_words)
+    row_words = input_width // codes_per_word
+    packed_starts = rows.to(tl.int64) * (row_words * bytes_per_word)
     output_starts = rows.to(tl.int64) * input_width
     for tile in range(tiles_per_row):
-        byte_positions = tile * tile_bytes + offsets
-        valid = row_valid[:, None] & (byte_positions < row_bytes)[None, :]
-        codes = tl.load(packed + packed_starts[:, None] + byte_positions[None, :], valid, other=0)
-        low = (codes & 15).to(tl.int32)
-        high = (codes >> 4).to(tl.int32)
-        if uniform_grid:
-            low_values = grid_minimum + low.to(tl.float32) * grid_step
-            high_values = grid_minimum + high.to(tl.float32) * grid_step
-        else:
-            low_values = tl.load(values + low)
-            high_values = tl.load(values + high)
-        scale_indices = rows * groups_per_row + (2 * tile * tile_bytes) // group_width
+        word_positions = tile * tile_words + offsets
+        valid = row_valid[:, None] & (word_positions < row_words)[None, :]
+        words = packed_words(packed, packed_starts, word_positions, valid, bytes_per_word)
+        scale_indices = rows * groups_per_row + (tile * tile_words * codes_per_word) // group_width
         scale = tl.load(scales + scale_indices, row_valid, other=0).to(tl.float32)
-        low_weights = low_values * scale[:, None]
-        high_weights = high_values * scale[:, None]
         if has_zero:
             zero = tl.load(zeros + scale_indices, row_valid, other=0).to(tl.float32)
-            low_weights += zero[:, None]
-            high_weights += zero[:, None]
-        positions = output + output_starts[:, None] + 2 * byte_positions[None, :]
-        tl.store(positions, low_weights, valid)
-        tl.store(positions + 1, high_weights, valid)
+        code_positions = word_positions * codes_per_word
+        positions = output + output_starts[:, None] + code_positions[None, :]
+        for code in tl.static_range(codes_per_word):
+            codes = ((words >> (code * code_bits)) & ((1 << code_bits) - 1)).to(tl.int32)
+            if uniform_grid:
+                weights = grid_minimum + codes.to(tl.float32) * grid_step
+            else:
+                weights = tl.load(values + codes)
+            weights = weights * scale[:, None]
+            if has_zero:
+                weights += zero[:, None]
+            tl.store(positions + code, weights, valid)
 
 
 def decode(
@@ -227,12 +283,12 @@ def decode(
     zeros: Tensor | None,
     output: Tensor,
     group: int,
-    tile_bytes: int,
+    layout: PackedLayout,
     uniform_grid: bool,
     grid_minimum: float,
     grid_step: float,
 ) -> None:
-    """Reconstruct the dense weight matrix from byte-aligned packed four-bit codes."""
+    """Reconstruct the dense weight matrix from word-aligned packed codes."""
     output_width, input_width = output.shape
     decode_rows[(triton.cdiv(output_width, ROW_TILE),)](
         packed,
@@ -244,11 +300,14 @@ def decode(
         output_width,
         scales.shape[1],
         group,
-        triton.cdiv(input_width // 2, tile_bytes),
+        layout.tiles_per_row(input_width),
         zeros is not None,
         uniform_grid,
         grid_minimum,
         grid_step,
         ROW_TILE,
-        tile_bytes,
+        layout.bits,
+        layout.bytes_per_word,
+        layout.codes_per_word,
+        layout.tile_words,
     )

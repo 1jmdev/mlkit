@@ -1,4 +1,4 @@
-"""A linear layer that executes four-bit scalar-grid codes with fused CUDA kernels."""
+"""A linear layer that executes packed scalar-grid codes with fused CUDA kernels."""
 
 from collections.abc import Callable
 from typing import Any
@@ -10,12 +10,13 @@ from torch import Tensor, nn
 
 from mlkit.kernels import launching
 from mlkit.kernels.packed_linear import (
+    MAXIMUM_CODE_BITS,
     ROW_TILE,
     decode,
+    layout_for,
     matrix_vector,
     packed_matrix_vector,
     sample_tile_for,
-    tile_bytes_for,
 )
 from mlkit.models.module_utilities import preserve_input_processing
 from mlkit.quantization.codecs import decode_scaled
@@ -38,11 +39,12 @@ class DirectLaunch:
 
 
 class PackedLinear(nn.Module):
-    """Exact scalar-grid codes, fused CUDA decode, and dense prefill fallback.
+    """Exact scalar-grid codes of one to eight bits, fused CUDA decode, and dense prefill.
 
     Up to ``maximum_fused_rows`` input rows are multiplied by the packed codes
     directly. Larger inputs reconstruct the dense weight once and use an
-    ordinary matrix product.
+    ordinary matrix product. A layer whose rows or scale groups split a packing
+    word keeps its packed storage and always reconstructs the dense weight.
     """
 
     packed: Tensor
@@ -56,8 +58,8 @@ class PackedLinear(nn.Module):
         super().__init__()
         if not packed_compatible(quantized):
             raise ValueError(
-                "PackedLinear requires a complete four-bit scalar-grid codec in its original "
-                "column order with refit boundaries aligned to scale groups"
+                "PackedLinear requires a complete scalar-grid codec of at most eight bits in "
+                "its original column order with refit boundaries aligned to scale groups"
             )
         assert quantized.codes is not None
         device = original.weight.device
@@ -66,9 +68,10 @@ class PackedLinear(nn.Module):
         self.in_features = original.in_features
         self.out_features = original.out_features
         self.group = quantized.params["group"]
+        self.code_bits = int(quantized.metadata["code_bits"])
         self.storage_dtype = original.weight.dtype
         self.cache_dense = cache_dense
-        self.register_buffer("packed", pack(quantized.codes, 4).to(device))
+        self.register_buffer("packed", pack(quantized.codes, self.code_bits).to(device))
         scales = quantized.params["scales"]
         scale_dtype = SCALE_STORAGE_DTYPES.get(
             str(quantized.metadata.get("scale_fmt")), scales.dtype
@@ -92,10 +95,8 @@ class PackedLinear(nn.Module):
         )
         self.grid_minimum = float(scalar_values[0])
         self.grid_step = float(differences[0]) if len(differences) else 1.0
-        # Rows and scale groups must be byte aligned for the fused kernels.
-        self.tile_bytes = tile_bytes_for(self.in_features, self.group)
-        self.maximum_fused_rows = 0 if self.tile_bytes is None else MAXIMUM_FUSED_ROWS
-        # Launch constants and the specialization they select; rebuilt after buffers change.
+        self.layout = layout_for(self.code_bits, self.in_features, self.group)
+        self.maximum_fused_rows = 0 if self.layout is None else MAXIMUM_FUSED_ROWS
         self._constant_arguments: tuple[Any, ...] = ()
         self._specialization: tuple[Any, ...] = ()
         preserve_input_processing(original, self)
@@ -110,8 +111,8 @@ class PackedLinear(nn.Module):
     def weight(self) -> Tensor:
         if self._dense_weight is not None:
             return self._dense_weight
-        if self.tile_bytes is None:
-            codes = unpack(self.packed, 4, (self.out_features, self.in_features))
+        if self.layout is None:
+            codes = unpack(self.packed, self.code_bits, (self.out_features, self.in_features))
             reconstruction = decode_scaled(
                 codes,
                 scales=self.scales.float(),
@@ -132,7 +133,7 @@ class PackedLinear(nn.Module):
                 self.zeros,
                 reconstruction,
                 self.group,
-                self.tile_bytes,
+                self.layout,
                 self.uniform_grid,
                 self.grid_minimum,
                 self.grid_step,
@@ -158,8 +159,7 @@ class PackedLinear(nn.Module):
             flattened = flattened.contiguous()
         output = inputs.new_empty((rows, self.out_features))
         if torch.compiler.is_compiling() or not DirectLaunch.available:
-            # The public Triton call is what the compiler captures into its graph.
-            assert self.tile_bytes is not None
+            assert self.layout is not None
             matrix_vector(
                 flattened,
                 self.packed,
@@ -169,7 +169,7 @@ class PackedLinear(nn.Module):
                 self.bias,
                 output,
                 self.group,
-                self.tile_bytes,
+                self.layout,
                 uniform_grid=self.uniform_grid,
                 grid_minimum=self.grid_minimum,
                 grid_step=self.grid_step,
@@ -179,24 +179,33 @@ class PackedLinear(nn.Module):
         return output.view(shape[:-1] + (self.out_features,))
 
     def _launch_directly(self, inputs: Tensor, output: Tensor, rows: int) -> None:
-        """Launch the matrix-vector kernel without Triton's per-call argument binding."""
+        """Launch the matrix-vector kernel without Triton's per-call argument binding.
+
+        The constant arguments and the specialization they select are cached and
+        rebuilt after the buffers change. The compiler path uses the public
+        Triton call instead, because that is what it captures into its graph.
+        """
         scales, zeros, bias = self.scales, self.zeros, self.bias
         constants = self._constant_arguments
         if not constants:
-            assert self.tile_bytes is not None
+            layout = self.layout
+            assert layout is not None
             constants = self._constant_arguments = (
                 self.in_features,
                 self.out_features,
                 scales.shape[1],
                 self.group,
-                triton.cdiv(self.in_features // 2, self.tile_bytes),
+                layout.tiles_per_row(self.in_features),
                 zeros is not None,
                 bias is not None,
                 self.uniform_grid,
                 self.grid_minimum,
                 self.grid_step,
                 ROW_TILE,
-                self.tile_bytes,
+                layout.bits,
+                layout.bytes_per_word,
+                layout.codes_per_word,
+                layout.tile_words,
             )
             self._specialization = (
                 scales.device.index,
@@ -232,7 +241,6 @@ class PackedLinear(nn.Module):
         try:
             launching.launch(compiled, grid, arguments)
         except TypeError:
-            # Argument parsing failed before the launch, so the public path can take over.
             DirectLaunch.available = False
             packed_matrix_vector[grid](*arguments)
 
@@ -242,8 +250,12 @@ def packed_compatible(quantized: Q) -> bool:
     if quantized.codec not in {"scaled", "feedback"}:
         return False
     group = quantized.params["group"]
+    code_bits = quantized.metadata.get("code_bits")
     return (
-        quantized.metadata.get("code_bits") == 4
+        isinstance(code_bits, int)
+        and 1 <= code_bits <= MAXIMUM_CODE_BITS
+        and quantized.codes is not None
+        and quantized.params["values"].numel() <= 2**code_bits
         and quantized.params.get("offset", 0) == 0
         and quantized.params.get("permutation") is None
         and quantized.params.get("refit", group) % group == 0

@@ -122,13 +122,13 @@ def test_packed_linear_executes_error_feedback_codecs() -> None:
     ("input_width", "group"),
     [(255, 64), (256, 5), (250, 20)],
 )
-def test_layouts_without_byte_alignment_use_dense_reconstruction(
+def test_layouts_that_split_a_packing_word_use_dense_reconstruction(
     input_width: int,
     group: int,
 ) -> None:
     packed, converted = packed_and_reference(mk.int(4, group=group), input_width=input_width)
     layer = packed.module[0]
-    assert layer.tile_bytes is None
+    assert layer.layout is None
     assert layer.maximum_fused_rows == 0
     inputs = torch.randn(2, input_width)
     with torch.inference_mode():
@@ -157,3 +157,46 @@ def test_packed_linear_can_be_copied_and_cast_after_launching() -> None:
         result = single(inputs.float())
         torch.testing.assert_close(result, expected.float(), rtol=2e-3, atol=2e-3)
         assert result.dtype == torch.float32
+
+
+WIDTH_FORMATS = {
+    "int2": mk.int(2, group=64),
+    "int3": mk.int(3, group=64),
+    "int5": mk.int(5, group=64),
+    "int6": mk.int(6, group=32),
+    "int7": mk.int(7, group=64),
+    "int8": mk.int(8, group=128),
+    "int3-asymmetric": mk.int(3, group=64, asym=True),
+    "e4m3": mk.scaled(mk.grid.fp("e4m3"), group=64),
+    "codebook3": mk.scaled(mk.grid.values(torch.linspace(-1, 1, 7).pow(3), bits=3), group=32),
+}
+
+
+@pytest.mark.parametrize("name", WIDTH_FORMATS)
+@pytest.mark.parametrize("rows", [1, 3, 20])
+def test_packed_linear_executes_every_code_width(name: str, rows: int) -> None:
+    packed, converted = packed_and_reference(WIDTH_FORMATS[name])
+    layer = packed.module[0]
+    bits = converted.quantized["0"].metadata["code_bits"]
+    assert layer.layout is not None
+    assert layer.packed.numel() == 37 * 256 * bits // 8
+    inputs = torch.randn(rows, 256)
+    with torch.inference_mode():
+        torch.testing.assert_close(packed(inputs), converted(inputs), rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(layer.weight, converted.module[0].weight, rtol=1e-6, atol=1e-7)
+
+
+def test_three_bit_rows_that_split_a_word_use_dense_reconstruction() -> None:
+    packed, converted = packed_and_reference(mk.int(3, group=50), input_width=250)
+    layer = packed.module[0]
+    assert layer.layout is None
+    inputs = torch.randn(2, 250)
+    with torch.inference_mode():
+        torch.testing.assert_close(packed(inputs), converted(inputs), rtol=1e-4, atol=1e-5)
+
+
+def test_wide_codes_remain_dense() -> None:
+    converted = mk.quantize(nn.Sequential(nn.Linear(64, 16)), mk.int(12, group=32), calib=None)
+    packed = mk.optimize(converted, backend="packed")
+    assert isinstance(packed.module[0], nn.Linear)
+    assert packed.execution_backend == "packed:0"
