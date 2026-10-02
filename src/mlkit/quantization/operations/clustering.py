@@ -3,6 +3,7 @@
 import torch
 from torch import Tensor
 
+from mlkit.kernels import scalar_clustering
 from mlkit.quantization.operations.search import nearest
 
 
@@ -15,7 +16,11 @@ def kmeans(
     seed: int = 0,
     chunk: int | None = None,
 ) -> Tensor:
-    """Deterministic weighted Lloyd iterations for scalar or vector codebooks."""
+    """Deterministic weighted Lloyd iterations for scalar or vector codebooks.
+
+    Scalar codebooks of at most 256 centers are fitted on CUDA by a fused kernel.
+    A cluster that receives no samples keeps its center.
+    """
     scalar = value.ndim == 1
     samples = value.reshape(-1, 1) if scalar else value
     if samples.ndim != 2 or not 1 <= k <= len(samples) or iters < 1:
@@ -34,6 +39,13 @@ def kmeans(
         or not torch.isfinite(importance).all()
     ):
         raise ValueError("weights must be finite and nonnegative with one value per sample")
+    if scalar and samples.is_cuda and k <= scalar_clustering.MAXIMUM_CLUSTERS:
+        return fused_scalar_kmeans(
+            samples[:, 0].contiguous(),
+            None if weights is None else importance.contiguous(),
+            centers[:, 0],
+            iters,
+        )
     for _ in range(iters):
         assignments = nearest(samples, centers, chunk=chunk, return_indices=True)
         order = assignments.argsort(stable=True)
@@ -51,3 +63,17 @@ def kmeans(
             centers,
         )
     return centers[:, 0].sort().values if scalar else centers
+
+
+def fused_scalar_kmeans(
+    samples: Tensor,
+    weights: Tensor | None,
+    centers: Tensor,
+    iterations: int,
+) -> Tensor:
+    """Lloyd iterations over ascending scalar centers with one kernel pass each."""
+    centers = centers.sort().values
+    for _ in range(iterations):
+        sums, totals = scalar_clustering.accumulate(samples, weights, centers)
+        centers = torch.where(totals > 0, sums / totals.clamp_min(1e-12), centers).sort().values
+    return centers

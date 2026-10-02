@@ -111,3 +111,49 @@ def test_hadamard_is_differentiable_and_orthogonal() -> None:
         rtol=1e-4,
         atol=1e-5,
     )
+
+
+@pytest.mark.parametrize("entries", [1, 2, 7, 16, 255, 1000])
+def test_fused_snap_matches_the_tensor_reference(entries: int) -> None:
+    codebook = torch.randn(entries)
+    values = torch.randn(37, 513) * 1.5
+    values[0, : min(entries, 513)] = codebook[:513]
+    ordered = codebook.sort().values
+    if entries > 1:
+        values[1, : entries - 1] = (ordered[1:] + ordered[:-1])[:513] / 2
+    fused = mk.snap(values, codebook)
+    reference = mk.snap(values.double(), codebook.double()).float()
+    assert torch.equal(fused, reference)
+    assert fused.shape == values.shape
+
+
+def test_snap_keeps_gradients_to_a_trainable_codebook() -> None:
+    codebook = torch.linspace(-1, 1, 5).requires_grad_(True)
+    values = torch.randn(8, 16)
+    mk.snap(values, codebook).sum().backward()
+    assert codebook.grad is not None
+    assert codebook.grad.sum() == values.numel()
+
+
+@pytest.mark.parametrize("clusters", [2, 16, 100])
+@pytest.mark.parametrize("weighted", [True, False])
+def test_fused_scalar_kmeans_matches_the_tensor_reference(
+    monkeypatch,
+    clusters: int,
+    weighted: bool,
+) -> None:
+    from mlkit.kernels import scalar_clustering
+
+    samples = torch.randn(20_011)
+    weights = torch.rand(20_011) if weighted else None
+    fused = mk.kmeans(samples, k=clusters, weights=weights, iters=4, seed=3)
+    monkeypatch.setattr(scalar_clustering, "MAXIMUM_CLUSTERS", 0)
+    reference = mk.kmeans(samples, k=clusters, weights=weights, iters=4, seed=3)
+    assert torch.equal(fused, fused.sort().values)
+    torch.testing.assert_close(fused, reference, rtol=0, atol=1e-4)
+
+
+def test_scalar_kmeans_keeps_the_center_of_an_empty_cluster() -> None:
+    samples = torch.tensor([1.0, 1.0, 1.0, 1.0])
+    centers = mk.kmeans(samples, k=2, iters=3)
+    assert torch.equal(centers, torch.tensor([1.0, 1.0]))
