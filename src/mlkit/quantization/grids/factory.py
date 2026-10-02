@@ -15,6 +15,13 @@ from mlkit.quantization.operations.trellis_search import one_mad, viterbi
 
 
 class Grid:
+    """A rounding function with its bit cost per group of ``dim`` elements.
+
+    ``values`` lists the representable points when they are known. ``integer``
+    declares consecutive integer values, which round arithmetically instead of
+    by a codebook search.
+    """
+
     def __init__(
         self,
         function: Callable[[Tensor], Tensor],
@@ -32,7 +39,6 @@ class Grid:
         self.dim = dim
         self.values = values
         self.name = name
-        # Consecutive integer values permit arithmetic rounding instead of a codebook search.
         self.integer = integer
 
     def __call__(self, value: Tensor) -> Tensor:

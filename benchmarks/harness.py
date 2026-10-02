@@ -18,7 +18,6 @@ import mlkit as mk
 
 RESULTS_DIRECTORY = Path("benchmark_results")
 
-# Linear layer shapes [out, in] of the two development models.
 LLAMA_SHAPES = {
     "attention": (2048, 2048),
     "key_value": (512, 2048),

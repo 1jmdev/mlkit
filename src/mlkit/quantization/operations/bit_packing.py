@@ -92,14 +92,17 @@ def unpack(packed: Tensor, bits: int, shape: tuple[int, ...]) -> Tensor:
 
 
 def unpack_across_bytes(stream: Tensor, bits: int, count: int) -> Tensor:
-    """Decode precisions whose codes cross byte boundaries, one periodic group at a time."""
+    """Decode precisions whose codes cross byte boundaries, one periodic group at a time.
+
+    Every code is read through a three-byte window. A code never leaves its
+    group, and two zero guard bytes per group keep the window in range.
+    """
     bytes_per_group = bits // math.gcd(bits, 8)
     codes_per_group = 8 // math.gcd(bits, 8)
     padding = (-stream.numel()) % bytes_per_group
     if padding:
         stream = torch.cat((stream, stream.new_zeros(padding)))
     groups = stream.reshape(-1, bytes_per_group)
-    # A code never leaves its group; two zero guard bytes keep the three-byte window in range.
     grouped = torch.cat((groups, groups.new_zeros(len(groups), 2)), dim=1).to(torch.int32)
     storage_dtype = torch.uint8 if bits <= 8 else torch.int32
     output = torch.empty((len(grouped), codes_per_group), dtype=storage_dtype, device=stream.device)

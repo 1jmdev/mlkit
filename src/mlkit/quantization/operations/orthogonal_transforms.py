@@ -70,6 +70,11 @@ def paley_matrix(order: int) -> Tensor:
 
 @functools.lru_cache(maxsize=128)
 def transform_factor(width: int) -> tuple[int, int, Tensor | None]:
+    """Factor ``width`` into a dense orthonormal basis order and a Hadamard power of two.
+
+    A width without a Paley construction keeps its odd factor as an orthonormal
+    DCT basis, which inverts exactly and needs neither padding nor a full basis.
+    """
     if width < 1:
         raise ValueError("transform width must be positive")
     if width & (width - 1) == 0:
@@ -86,8 +91,6 @@ def transform_factor(width: int) -> tuple[int, int, Tensor | None]:
             return order, power // multiplier, paley_matrix(order)
         except ValueError:
             continue
-    # An odd dimension cannot have a real Hadamard matrix. An orthonormal DCT
-    # factor preserves exact inversion and avoids padding or a dense full basis.
     indices = torch.arange(factor, dtype=torch.float64)
     matrix = torch.cos(math.pi / factor * (indices[None, :] + 0.5) * indices[:, None])
     matrix[0] *= 1 / math.sqrt(factor)

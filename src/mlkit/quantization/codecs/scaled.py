@@ -52,7 +52,6 @@ def decode_grouped(
         )
     reconstruction = values[codes.int()]
     if width % group == 0:
-        # Whole groups broadcast their scale without gathering one per element.
         grouped = reconstruction.reshape(rows, -1, group) * scales[:, :, None]
         if zero is not None:
             grouped = grouped + zero[:, :, None]
@@ -91,7 +90,6 @@ def decode_feedback(
     permutation: Tensor | None = None,
 ) -> Tensor:
     if refit % group == 0:
-        # Regions hold whole groups, so scales are laid out exactly as without refitting.
         reconstruction = decode_grouped(codes, scales, values, group, zero)
     else:
         columns = torch.arange(codes.shape[1], device=codes.device)

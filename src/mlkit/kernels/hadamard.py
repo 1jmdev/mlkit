@@ -32,7 +32,6 @@ def hadamard_pass(
 ):
     group = tl.program_id(0).to(tl.int64) * block + tl.arange(0, block)
     valid = group < groups
-    # A group holds ``2**stages`` elements spaced by the stride of its first stage.
     low = group & (stride - 1)
     base = ((group >> stride_bits) << (stride_bits + stages)) + low
     x0 = tl.load(source + base, valid, other=0)
@@ -113,7 +112,6 @@ def transform(value: Tensor, *, normalize: bool) -> Tensor:
     if width == 1:
         return output.copy_(value)
     remaining = width.bit_length() - 1
-    # The FP32 quotient that dividing a tensor by the square root would use.
     scale = float(torch.tensor(1.0) / torch.tensor(math.sqrt(width)))
     source = value
     stride_bits = 0

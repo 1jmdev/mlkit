@@ -31,8 +31,6 @@ from mlkit.quantization.representation import Q, as_q
 FUSED_CODEBOOK_LIMIT = 256
 FUSED_VECTOR_DIMENSIONS = {2, 4, 8, 16}
 FUSED_VECTOR_CODEBOOK_LIMIT = 65536
-# cuSOLVER factors column-major matrices. From this width upward the upper factorization
-# is faster, and its transpose is already the row-major lower factor that kernels read.
 UPPER_FACTORIZATION_WIDTH = 4096
 
 
@@ -51,6 +49,10 @@ def feedback_coefficients(
     again, is the upper factor ``R``. The result is row-major and contiguous; only
     entries above the block diagonal are meaningful. A nonzero status reports an
     indefinite matrix.
+
+    cuSOLVER factors column-major matrices. From ``UPPER_FACTORIZATION_WIDTH``
+    upward the upper factorization is faster, and its transpose is already the
+    row-major lower factor.
     """
     width = hessian.shape[0]
     if permutation is None:
@@ -66,7 +68,6 @@ def feedback_coefficients(
         lower = factor.T
     else:
         lower, status = torch.linalg.cholesky_ex(reversed_hessian)
-    # The factor is a separate allocation, so the reversed copy can be released first.
     del reversed_hessian, diagonal
     if status.item() != 0:
         return lower, int(status.item())

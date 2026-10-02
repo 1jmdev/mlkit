@@ -191,7 +191,6 @@ class CalibrationSession:
             return False
         if len(self.calls[0]) != 1:
             return False
-        # Hidden states differ by construction, so both sides receive one placeholder.
         placeholder = torch.empty(0, device="cpu")
         reference = self.calls[0][0].with_hidden(placeholder)
         for calls in self.calls[1:]:

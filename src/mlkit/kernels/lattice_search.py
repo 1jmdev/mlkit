@@ -61,7 +61,6 @@ def nearest_lattice(inputs, magnitudes, output):
 def search(inputs: Tensor, magnitudes: Tensor) -> Tensor:
     flattened = inputs.reshape(-1, 8).contiguous()
     indices = torch.empty(len(flattened), device=inputs.device, dtype=torch.int32)
-    # One vector occupies a program; two warps hold its candidates with the least idle width.
     nearest_lattice[(len(flattened),)](
         flattened,
         magnitudes.contiguous(),

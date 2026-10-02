@@ -18,8 +18,8 @@ def snap(value: Tensor, codebook: Tensor) -> Tensor:
     )
 
 
-# Distances materialized at once by the vector search: 32 MiB of FP32 values.
 DISTANCE_BUDGET = 2**23
+"""Distances materialized at once by the vector search: 32 MiB of FP32 values."""
 
 
 def nearest(
@@ -45,8 +45,6 @@ def nearest(
         return indices if return_indices else codebook[indices].to(value.dtype)
     if chunk is None:
         chunk = max(1, DISTANCE_BUDGET // min(codebook_chunk, len(codebook)))
-    # The squared norm of a sample is common to all of its distances and cannot change
-    # which codeword is nearest, so only codeword norms and inner products are needed.
     tiles = []
     for offset in range(0, len(codebook), codebook_chunk):
         candidates = codebook[offset : offset + codebook_chunk].float()

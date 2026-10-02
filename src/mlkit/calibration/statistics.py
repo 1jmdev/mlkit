@@ -1,4 +1,11 @@
-"""Streaming calibration reductions collected on demand for one block at a time."""
+"""Streaming calibration reductions collected on demand for one block at a time.
+
+Second moments of half-precision activations are multiplied on tensor cores in
+TF32, because such values fit the TF32 significand. The result differs from the
+FP32 product by a few parts in 100,000, which is below the error of the FP32
+factorization that consumes a Hessian and far below its damping. Setting
+``TENSOR_FLOAT_PRODUCTS`` to false multiplies every second moment in FP32.
+"""
 
 from collections.abc import Callable
 
@@ -8,12 +15,7 @@ from torch import Tensor, nn
 from mlkit.calibration.session import CalibrationSession
 from mlkit.models.architecture import identify_siblings
 
-# Columns per block of the symmetric second-moment product.
 SECOND_MOMENT_BLOCK = 512
-# Half-precision activations fit the TF32 significand, so their second moments are
-# multiplied on tensor cores. The result differs from the FP32 product by a few parts in
-# 100,000, below the error of the FP32 factorization that consumes a Hessian and far
-# below its damping. Set to False to multiply every second moment in FP32.
 TENSOR_FLOAT_PRODUCTS = True
 HALF_PRECISION_DTYPES = {torch.float16, torch.bfloat16}
 

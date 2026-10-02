@@ -152,7 +152,6 @@ class QModel(Model):
         return records
 
     def save(self, path: str | Path, **options: Any) -> None:
-        # Checkpoints depend on this wrapper, so the convenience entry point imports lazily.
         from mlkit.checkpoints.saving import save
 
         save(self, path, **options)

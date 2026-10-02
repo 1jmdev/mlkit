@@ -73,11 +73,9 @@ def load_checkpoint(
         install_transform(module, descriptor, state)
         record_transform(module, descriptor)
     restore_missing_biases(module, state)
-    # Uninitialized parameters hold no storage, so checkpoint tensors become the parameters.
     module.load_state_dict(state, strict=True, assign=uninitialized)
     tie_weights = getattr(module, "tie_weights", None)
     if uninitialized and callable(tie_weights):
-        # Assignment gives each tied module its own parameter object; tie them again.
         tie_weights()
     del state
     module.cuda().eval()

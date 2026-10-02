@@ -14,7 +14,6 @@ def load(
     dtype: str | torch.dtype = "auto",
     **options: Any,
 ) -> Model:
-    # Checkpoints depend on the model wrapper, so the dispatch imports lazily.
     from mlkit.checkpoints import MANIFEST_FILE, load_checkpoint
 
     path = Path(name)

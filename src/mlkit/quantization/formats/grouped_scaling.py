@@ -92,7 +92,6 @@ class Scaled(Quantizer):
         value_range = self._value_maximum - self._value_minimum
         if asym and value_range <= 0:
             raise ValueError("asymmetric quantization requires at least two distinct grid values")
-        # Scales are a range multiplied by one of these reciprocals, on the host and in kernels.
         self._magnitude_reciprocal = single_precision_reciprocal(magnitude)
         self._range_reciprocal = single_precision_reciprocal(value_range) if asym else 1.0
 
@@ -162,7 +161,6 @@ class Scaled(Quantizer):
         scalar_values = None
         if self.grid.dim == 1 and values is not None:
             scalar_values = self.values_on(w.device)
-        # Fused kernels encode one byte per code and need a tile inside every group.
         tile = None
         if w.is_cuda and scalar_values is not None and len(scalar_values) <= FUSED_CODEBOOK_LIMIT:
             tile = scalar_encode.tile_for(group)
@@ -280,7 +278,6 @@ class Scaled(Quantizer):
             padded = functional.pad(weight, (0, (-width) % group))
             return self.scale(padded.reshape(-1, group)).reshape(rows, -1), None
         minimum, maximum = group_extrema(weight, group)
-        # A group extremum is not finite exactly when one of its weights is not.
         if not (torch.isfinite(minimum).all() and torch.isfinite(maximum).all()):
             raise ValueError("scaled requires a finite floating-point weight matrix")
         if self.asym:
@@ -325,7 +322,6 @@ class Scaled(Quantizer):
         rows, width = weight.shape
         padding = (-width) % group
         grouped = functional.pad(weight, (0, padding)).reshape(rows, -1, group)
-        # Padding completes the final group and must not contribute to its error.
         occupied = None
         if padding:
             positions = torch.arange(grouped.shape[1] * group, device=weight.device)
@@ -361,7 +357,6 @@ class Scaled(Quantizer):
         tile: int | None,
     ) -> Tensor:
         """Codes of the nearest scalar grid values for columns ``start`` to ``stop``."""
-        # The kernel indexes scales from the first column of the fitted region.
         fused = (
             tile is not None
             and start == 0

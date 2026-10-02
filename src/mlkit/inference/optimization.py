@@ -56,7 +56,6 @@ def optimize(
             converted = wrapped
         else:
             converted = copy.deepcopy(wrapped, replacements)
-            # Rebind hook contexts after all enclosing blocks have entered the memo.
             for module in converted.module.modules():
                 if isinstance(module, PackedLinear):
                     module._forward_pre_hooks = copy.deepcopy(

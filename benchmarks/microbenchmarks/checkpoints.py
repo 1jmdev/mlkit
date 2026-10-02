@@ -31,7 +31,6 @@ def converted_model(format: Callable[[], Any]) -> mk.QModel:
 def saving(format: Callable[[], Any]) -> Callable[[], Callable[[], Any]]:
     def prepare() -> Callable[[], Any]:
         converted = converted_model(format)
-        # The temporary directory is removed when the returned operation is released.
         directory = tempfile.TemporaryDirectory(prefix="mlkit_benchmark_")
         destination = Path(directory.name) / "checkpoint"
 
