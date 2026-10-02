@@ -1,11 +1,10 @@
 """Selection of dense or packed execution and optional compilation."""
 
 import copy
-from typing import Any
 
 from torch import nn
 
-from mlkit.inference.packed_linear import PackedLinear, packed_compatible
+from mlkit.inference.packed_linear import PackedEmbedding, PackedLinear, packed_compatible
 from mlkit.models.model import Model, QModel
 
 
@@ -21,7 +20,9 @@ def optimize(
     """Preserve reconstructions while choosing dense or packed execution.
 
     Packed execution supports scalar Q codecs of one to eight bits. Other formats
-    remain dense. TorchAO exports are a separate operation because they requantize.
+    remain dense. An embedding tied to a packed output head reads its rows from
+    the packed codes of the head. TorchAO exports are a separate operation
+    because they requantize.
     """
     if backend not in {"auto", "dense", "packed"}:
         raise ValueError("backend must be auto, dense, or packed")
@@ -32,27 +33,38 @@ def optimize(
         use_packed = isinstance(wrapped, QModel)
         backend = "packed" if use_packed else "dense"
     converted: Model
-    replacements: dict[int, Any] = {}
     if backend == "packed":
         if not isinstance(wrapped, QModel):
             raise ValueError("packed inference requires a QModel with codec state")
+        named_replacements: dict[str, nn.Module] = {}
         for name, quantized in wrapped.quantized.items():
             module = wrapped.module.get_submodule(name)
             if isinstance(module, nn.Linear) and packed_compatible(quantized):
-                replacements[id(module)] = PackedLinear(
+                named_replacements[name] = PackedLinear(
                     module, quantized, cache_dense=cache_dense
                 )
-        replacement_count = len(replacements)
+        replacement_count = len(named_replacements)
+        for parameter_name, layer_name in wrapped.tied_weights.items():
+            owner_name = parameter_name.rpartition(".")[0]
+            owner = wrapped.module.get_submodule(owner_name)
+            projection = named_replacements.get(layer_name)
+            if (
+                isinstance(owner, nn.Embedding)
+                and isinstance(projection, PackedLinear)
+                and projection.layout is not None
+            ):
+                named_replacements[owner_name] = PackedEmbedding(projection, owner)
+        replacements = {
+            id(wrapped.module.get_submodule(name)): replacement
+            for name, replacement in named_replacements.items()
+        }
         if inplace:
-            for name in wrapped.quantized:
-                module = wrapped.module.get_submodule(name)
-                if id(module) in replacements:
-                    replacement = replacements[id(module)]
-                    if name:
-                        wrapped.module.set_submodule(name, replacement)
-                    else:
-                        wrapped.module = replacement
-                        wrapped.architecture.model = replacement
+            for name, replacement in named_replacements.items():
+                if name:
+                    wrapped.module.set_submodule(name, replacement)
+                else:
+                    wrapped.module = replacement
+                    wrapped.architecture.model = replacement
             converted = wrapped
         else:
             converted = copy.deepcopy(wrapped, replacements)

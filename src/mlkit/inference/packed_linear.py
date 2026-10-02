@@ -245,6 +245,48 @@ class PackedLinear(nn.Module):
             packed_matrix_vector[grid](*arguments)
 
 
+class PackedEmbedding(nn.Module):
+    """An embedding table read from the packed codes of a tied output projection.
+
+    Row ``i`` of the projection weight is the embedding of token ``i``. Only the
+    requested rows are decoded, so the dense table is never materialized. The
+    projection is referenced without being registered, because it already
+    belongs to the model as its output head.
+    """
+
+    def __init__(self, projection: PackedLinear, original: nn.Embedding) -> None:
+        super().__init__()
+        if projection.layout is None:
+            raise ValueError("a packed embedding requires rows that hold whole packing words")
+        self._projection = (projection,)
+        self.num_embeddings = projection.out_features
+        self.embedding_dim = projection.in_features
+        self.padding_idx = original.padding_idx
+
+    @property
+    def projection(self) -> PackedLinear:
+        return self._projection[0]
+
+    @property
+    def weight(self) -> Tensor:
+        return self.projection.weight
+
+    def forward(self, indices: Tensor) -> Tensor:
+        projection = self.projection
+        rows = indices.reshape(-1)
+        packed = projection.packed.view(self.num_embeddings, -1)[rows]
+        codes = unpack(packed.reshape(-1), projection.code_bits, (rows.numel(), self.embedding_dim))
+        zeros = projection.zeros
+        embeddings = decode_scaled(
+            codes,
+            scales=projection.scales[rows].float(),
+            values=projection.values,
+            group=projection.group,
+            zero=None if zeros is None else zeros[rows].float(),
+        )
+        return embeddings.to(projection.storage_dtype).view(*indices.shape, self.embedding_dim)
+
+
 def packed_compatible(quantized: Q) -> bool:
     """Require a complete scalar codec with group-aligned fitting regions."""
     if quantized.codec not in {"scaled", "feedback"}:

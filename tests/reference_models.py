@@ -54,7 +54,7 @@ class SharedProjectionModel(nn.Module):
         )
 
 
-def create_tiny_llama():
+def create_tiny_llama(*, tie_word_embeddings: bool = False):
     """A two-block Llama with grouped key/value heads, created without downloads."""
     import transformers
 
@@ -66,5 +66,6 @@ def create_tiny_llama():
         num_attention_heads=4,
         num_key_value_heads=2,
         head_dim=8,
+        tie_word_embeddings=tie_word_embeddings,
     )
     return transformers.LlamaForCausalLM(configuration)
