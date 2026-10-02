@@ -3,9 +3,11 @@
 An extensible PyTorch quantization library for NVIDIA GPUs. **In development:**
 the API and checkpoint format may change before the first stable release.
 
-Quantization formats are ordinary functions. Calibration algorithms, model
-conversion, evaluation and packed inference use the same format interface.
-CUDA placement is automatic throughout mlkit's model API.
+Quantization formats are ordinary functions and small classes assembled from
+building blocks: grids, grouped scaling, codecs and calibration algorithms.
+Model conversion, evaluation, checkpoints and packed inference all use the same
+format interface, so a new format works with every one of them. mlkit targets
+CUDA exclusively; the hot paths are fused Triton kernels.
 
 ## Installation
 
@@ -25,8 +27,8 @@ PyTorch. Hugging Face model loading and datasets are optional dependencies.
 import mlkit as mk
 
 model = mk.load("Qwen/Qwen2.5-0.5B", dtype="float16")
-calibration = mk.data("wikitext2", n=8, seq=256)
-evaluation = mk.data("wikitext2", n=16, seq=256, split="test")
+calibration = mk.data("wikitext2", n=16, seq=1024)
+evaluation = mk.data("wikitext2", n=40, seq=1024, split="test")
 
 quantized = mk.quantize(model, "gptq-int4-g128", calib=calibration)
 print(mk.ppl(quantized, data=evaluation, budget="full"))
@@ -45,22 +47,31 @@ Formats that return a tensor without declaring bits report an unknown bit cost.
 import torch
 import mlkit as mk
 
-
-@mk.grid(bits=4)
-def logarithmic_grid(values):
-    codebook = torch.tensor([-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0])
-    return mk.snap(values, codebook)
-
-
-format = mk.scaled(logarithmic_grid, group=64, scale="mse")
+codebook = torch.tensor([-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0])
+format = mk.scaled(mk.grid.values(codebook, bits=3), group=64, scale="mse")
+print(mk.capabilities(format))
 quantized = mk.quantize(model, mk.gptq(format), calib=calibration)
 ```
 
-Use `@mk.quantizer` for a complete custom function, or subclass `mk.Quantizer`
-and implement `fit` for formats with learned parameters. Reading `ctx.H`,
-`ctx.X` or activation statistics triggers calibration only when needed.
+```text
+quantizer           scaled(Grid(values, bits=3, dim=1), group=64, scale='mse')
+bits per weight     3.2500
+codec               scaled
+checkpoint          codes with a registered codec
+error feedback      fused scalar kernel at step=1
+packed inference    fused kernel
+online activations  reference rounding
+```
 
-## Compare methods and use mixed precision
+`mk.capabilities` rounds a random matrix and reports which fused kernels,
+checkpoint form and inference backend a quantizer qualifies for. A format built
+from `mk.scaled` inherits fused encoding, fused GPTQ, portable checkpoints and
+packed inference. Use `@mk.quantizer` for a complete custom function, or
+subclass `mk.Quantizer` and implement `fit` for formats with learned parameters.
+Reading `ctx.H`, `ctx.X` or activation statistics triggers calibration only when
+needed. [Building a format](docs/building_formats.md) walks through every block.
+
+## Compare methods, mix precisions, quantize the output head
 
 ```python
 mk.compare(
@@ -76,10 +87,27 @@ quantized = mk.quantize(model, {
     "*.mlp.down_proj": mk.gptq(mk.int(4, group=64)),
     "*.mlp.*": mk.gptq(mk.int(3, group=128)),
 }, calib=calibration)
+
+recipe = mk.Recipe(
+    weights=mk.gptq(mk.int(4, group=128)),
+    head=mk.gptq(mk.int(4, group=128)),
+)
+quantized = mk.quantize(model, recipe, calib=calibration)
 ```
 
 Patterns are matched in insertion order. A matching `None` skips the layer.
-A single quantizer skips embeddings and the output head by default.
+`weights` covers the linear layers inside the repeated blocks. `head` covers
+linear layers outside them, such as the output head, and is off by default. A
+tied input embedding takes the rounded values of its head and is stored once.
+
+```python
+@mk.preset("w4-head4")
+def w4_head4():
+    return mk.Recipe(weights=mk.gptq(mk.int(4)), head=mk.gptq(mk.int(4)))
+
+
+quantized = mk.quantize(model, "w4-head4", calib=calibration)
+```
 
 ## Inference and checkpoints
 
@@ -95,9 +123,11 @@ restored = mk.optimize(mk.load("checkpoints/int4"), compile=True)
 ```
 
 Quantization first produces reconstructed weights for research and evaluation.
-`optimize` uses packed four-bit scalar codecs when compatible, including INT4
-and NF4. Other formats retain reconstructed weights. Packed decoding uses a
-fused CUDA kernel; prefill reconstructs weights for matrix multiplication.
+`optimize` executes scalar codecs of one to eight bits from their packed codes
+with a fused CUDA kernel, including INT2 through INT8, NF4 and scalar codebooks.
+A packed output head serves its tied embedding from the same codes. Other
+formats retain reconstructed weights. Inputs of more than eight rows, such as a
+prompt, reconstruct the weight for an ordinary matrix product.
 Compiled Hugging Face generation uses a static cache for decoding. The first
 generation includes compilation; subsequent calls reuse the compiled graph.
 Checkpoints contain a JSON manifest and safetensors, without executable decoder
@@ -109,9 +139,12 @@ code. Custom registered codecs must be available when their checkpoints load.
 uv sync --group dev
 uv run pytest
 uv run ruff check .
+uv run mypy
+uv run python -m benchmarks.microbenchmarks --filter "algorithms/*"
 ```
 
-See [the contributor guide](docs/contributing.md) for development conventions.
+See [the contributor guide](docs/contributing.md) for the package layout,
+development conventions and the benchmark suite.
 
 Runnable examples cover [model conversion and generation](examples/quantize_model.py),
 [a learned format](examples/learned_codebook.py) and
