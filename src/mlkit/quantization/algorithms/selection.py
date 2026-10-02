@@ -34,6 +34,10 @@ class BestOf(Quantizer):
         assert selected is not None
         return selected
 
+    def __repr__(self) -> str:
+        candidates = ", ".join(repr(candidate) for candidate in self.candidates)
+        return f"best_of({candidates}, by={self.by!r})"
+
 
 def best_of(*candidates: QuantizerFunction, by: str = "proxy") -> BestOf:
     return BestOf(candidates, by=by)

@@ -95,6 +95,20 @@ class Quantizer:
     def __call__(self, w: Tensor, ctx: Ctx | None = None) -> Q:
         return as_q(self.fit(w, ctx or Ctx(device=w.device))(w, slice(None)))
 
+    def __repr__(self) -> str:
+        """The class name with every public attribute that has a stable description.
+
+        Reports and checkpoints record this text, so it must not depend on the
+        memory address of the instance.
+        """
+        described = (bool, int, float, str, type(None), Quantizer, Grid)
+        arguments = ", ".join(
+            f"{name}={value!r}"
+            for name, value in vars(self).items()
+            if not name.startswith("_") and isinstance(value, described)
+        )
+        return f"{type(self).__name__}({arguments})"
+
 
 class FunctionQuantizer(Quantizer):
     __name__: str

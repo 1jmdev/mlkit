@@ -16,7 +16,7 @@ def int(
 
 
 def nf4(group: builtins.int | None = 64, **options: Any) -> Scaled:
-    return scaled(grid.values(NF4_VALUES, bits=4), group=group, **options)
+    return scaled(grid.values(NF4_VALUES, bits=4, name="nf4"), group=group, **options)
 
 
 def mxfp4(group: builtins.int = 32, **options: Any) -> Scaled:

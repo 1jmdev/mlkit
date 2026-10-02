@@ -68,14 +68,20 @@ class GridFactory:
             integer=True,
         )
 
-    def values(self, values: Tensor, *, bits: builtins.int | None = None) -> Grid:
+    def values(
+        self,
+        values: Tensor,
+        *,
+        bits: builtins.int | None = None,
+        name: str = "values",
+    ) -> Grid:
         values = torch.as_tensor(values, dtype=torch.float32).flatten().sort().values
         if not values.numel() or not torch.isfinite(values).all():
             raise ValueError("a scalar codebook must contain finite values")
         precision = max(1, math.ceil(math.log2(values.numel()))) if bits is None else bits
         if values.numel() > 2**precision:
             raise ValueError("codebook size exceeds the declared bit capacity")
-        return Grid(lambda x: snap(x, values), precision, values=values, name="values")
+        return Grid(lambda x: snap(x, values), precision, values=values, name=name)
 
     def vector(self, codebook: Tensor, *, bits: builtins.int | None = None) -> Grid:
         codebook = torch.as_tensor(codebook, dtype=torch.float32)
@@ -94,7 +100,7 @@ class GridFactory:
         if format == "e2m1":
             magnitudes = [0.5, 1, 1.5, 2, 3, 4, 6]
             values = [-magnitude for magnitude in reversed(magnitudes)] + [0, *magnitudes]
-            return self.values(torch.tensor(values), bits=4)
+            return self.values(torch.tensor(values), bits=4, name=format)
         if format not in {"e3m2", "e2m3", "e4m3", "e5m2"}:
             raise ValueError(f"unsupported floating-point grid {format!r}")
         exponent_bits = builtins.int(format[1])
@@ -110,7 +116,9 @@ class GridFactory:
                 )
                 values.extend((-value, value))
         return self.values(
-            torch.tensor(sorted(set(values))), bits=1 + exponent_bits + mantissa_bits
+            torch.tensor(sorted(set(values))),
+            bits=1 + exponent_bits + mantissa_bits,
+            name=format,
         )
 
     def e8p(self) -> Grid:

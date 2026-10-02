@@ -390,7 +390,15 @@ class Scaled(Quantizer):
         return codes.to(torch.uint8 if self.grid.bits <= 8 else torch.int32)
 
     def __repr__(self) -> str:
-        return f"scaled({self.grid!r}, group={self.group}, scale={self.scale!r})"
+        scale = self.scale if isinstance(self.scale, str) else getattr(
+            self.scale, "__name__", type(self.scale).__name__
+        )
+        description = f"scaled({self.grid!r}, group={self.group}, scale={scale!r}"
+        if self.scale_fmt != "fp16":
+            description += f", scale_fmt={self.scale_fmt!r}"
+        if self.asym:
+            description += ", asym=True"
+        return description + ")"
 
 
 def scaled(
