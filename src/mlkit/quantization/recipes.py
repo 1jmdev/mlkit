@@ -69,7 +69,30 @@ def resolve_selector(value: Any, context: Ctx) -> Any:
     return value
 
 
-def preset(name: str) -> Recipe:
+_PRESETS: dict[str, Callable[[], Any]] = {}
+
+BUILTIN_PRESETS = (
+    "rtn-int4-g128, gptq-int4-g128, awq-int4-g128, nf4-g64, mxfp4-g32, or rtn-w4a4"
+)
+
+
+def preset(name: str) -> Callable[[Callable[[], Any]], Callable[[], Any]]:
+    """Register a recipe factory under a name accepted wherever a recipe is expected.
+
+    The factory takes no arguments and returns a recipe or a weight quantizer.
+    It is called each time the name is resolved, so every conversion receives a
+    fresh recipe.
+    """
+    def register(factory: Callable[[], Any]) -> Callable[[], Any]:
+        if not name or name in _PRESETS or builtin_preset(name) is not None:
+            raise ValueError(f"preset name {name!r} is empty or already defined")
+        _PRESETS[name] = factory
+        return factory
+
+    return register
+
+
+def builtin_preset(name: str) -> Recipe | None:
     match = re.fullmatch(r"(rtn|gptq|awq)-int([2-8])-g([1-9][0-9]*)", name)
     if match:
         method, bits, group = match.groups()
@@ -86,15 +109,25 @@ def preset(name: str) -> Recipe:
         return Recipe(weights=standard.mxfp4(), name=name)
     if name == "rtn-w4a4":
         return Recipe(weights=standard.int(4), acts=standard.int(4, group=None), name=name)
-    raise ValueError(
-        f"unknown preset {name!r}; expected rtn-int4-g128, gptq-int4-g128, "
-        "awq-int4-g128, nf4-g64, mxfp4-g32, or rtn-w4a4"
-    )
+    return None
+
+
+def resolve_preset(name: str) -> Recipe:
+    """The recipe of a registered or built-in preset name."""
+    factory = _PRESETS.get(name)
+    if factory is not None:
+        definition = normalize_recipe(factory())
+        return definition if definition.name is not None else definition.replace(name=name)
+    builtin = builtin_preset(name)
+    if builtin is None:
+        registered = "".join(f", {registered_name}" for registered_name in sorted(_PRESETS))
+        raise ValueError(f"unknown preset {name!r}; expected {BUILTIN_PRESETS}{registered}")
+    return builtin
 
 
 def normalize_recipe(value: Any) -> Recipe:
     if isinstance(value, Recipe):
         return value
     if isinstance(value, str):
-        return preset(value)
+        return resolve_preset(value)
     return Recipe(weights=value)
