@@ -31,6 +31,11 @@ A bare tensor has unknown bit cost. `Q.bits` is the total logical number of bits
 including declared side information. `context.add_bits(n)` adds information once
 per layer call, including parameters fitted before column rounding.
 
+`mk.capabilities(quantizer)` rounds a random matrix and reports the bit cost,
+codec, checkpoint form, error-feedback path, packed inference path and online
+activation path of a quantizer. [Building a format](building_formats.md)
+describes each building block and what the fused paths require.
+
 Use `@mk.grid(bits=n, dim=d)` for a rounding grid. Grid bits describe one scalar
 or one vector of dimension `d`. `mk.scaled` adds grouping, scale fitting and
 optional asymmetric offsets. Built-in grids include integers, named floating
@@ -40,6 +45,10 @@ formats, scalar codebooks, vector codebooks and E8P.
 codebook = torch.tensor([-1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0])
 format = mk.scaled(mk.grid.values(codebook, bits=3), group=64, scale="mse")
 ```
+
+Scalar grids with explicit values of at most 256 entries are fitted, encoded and
+decoded by fused CUDA kernels that reproduce the tensor reference bit for bit.
+`mk.grid.values(values, name=...)` names a grid in reports.
 
 Groups are row-aligned. Partial final groups have their own scale. `group=None`
 means one scale per row. Scale fitting accepts `"absmax"`, `"mse"` or a callable;
@@ -56,10 +65,17 @@ Implement `fit(weight, context)` and return `round_columns(values, columns)`.
 `columns` is a slice relative to the fitted region. The rounder may receive a
 single column or a vector-width block. The default `__call__` fits and rounds
 the whole matrix.
-Native scalar rounders from `mk.scaled(...).fit(...)` retain CUDA execution
+Native rounders from `mk.scaled(...).fit(...)` retain CUDA execution
 information. Their `with_metadata(...)` method can declare learned parameters
-without losing fused GPTQ rounding. Integer grids and scalar codebooks of up to
-256 values have this fused path; arbitrary custom rounders keep their own logic.
+without losing fused rounding. Integer grids and scalar codebooks of up to 256
+values are rounded inside GPTQ by a fused kernel. E8P and vector codebooks of
+dimension 2, 4, 8 or 16 are rounded inside LDLQ by a fused kernel when `step`
+equals the grid dimension. Arbitrary custom rounders keep their own logic.
+
+A `mk.Quantizer` subclass is described in reports by its class name and public
+attributes. Setting `row_separable = True` declares that rows are rounded
+independently, which lets layers above 67 million weights be converted in row
+chunks. `mk.scaled`, and `rtn`, `gptq` and `ldlq` around it, are row separable.
 
 | Wrapper | Purpose |
 | --- | --- |
@@ -96,10 +112,16 @@ are counted; deterministic signs reconstructed from seeds have zero logical cost
 | `rng` | Layer-name-derived generator |
 | `cache` | Shared per-run codebooks and bookkeeping |
 | `replace(H=...)` | A context with overridden statistics |
+| `derive(provider)` | A context for transformed weights with lazily computed statistics |
 
 ```python
 fourth_moment = context.stat("fourth_moment", lambda x: x.pow(4).mean(0), reduce="mean")
 ```
+
+An algorithm that permutes, rotates or rescales the weight columns gives its
+inner quantizer `context.derive(provider)`. The provider receives
+`(name, function, reduction)` and returns the statistic in the transformed
+basis; it is called only for statistics the inner quantizer reads.
 
 Statistics are collected on demand. Later blocks collect previously requested
 statistics together. Known sibling projections share reductions. With
@@ -110,6 +132,21 @@ Shared block metadata has one host snapshot per calibration batch. Completed
 block inputs and targets are released during conversion unless a model pass
 requires their history.
 
+A few tokens of a transformer carry activations orders of magnitude larger than
+all others. Left alone they dominate every second moment, and error feedback
+then trades the accuracy of ordinary tokens for theirs. `quantize` and `probe`
+therefore scale each calibration token down to at most `token_energy_limit`
+times the median token energy of its batch; the default is 100 and `None`
+disables the limit. On Llama 3.2 1B, GPTQ INT4 reaches a perplexity of 12.73
+with the limit and 15.02 without it, where direct rounding reaches 14.24.
+
+Captured block inputs stay on CUDA while a quarter of the device memory, and at
+least one gibibyte, remains free; otherwise they move to host memory. `calibration_storage="cuda"` or `"host"`
+forces either placement. Second moments of half-precision activations are
+multiplied on tensor cores in TF32, which changes a Hessian by a few parts in
+100,000; `mlkit.calibration.statistics.TENSOR_FLOAT_PRODUCTS = False` selects
+FP32 products.
+
 Online activation quantizers discover statistic requirements during conversion.
 Their collected statistics are frozen before inference. Custom quantizers whose
 statistic requirements depend on a later input branch must request those
@@ -119,12 +156,13 @@ statistics during calibration.
 
 A quantizer, a preset string, an ordered pattern map or `Recipe` is accepted by
 `quantize`. The first matching pattern wins; `None` skips a layer. A pattern value
-may be a `context -> quantizer` selector. A bare quantizer skips output heads;
-embeddings are never treated as linear matrices.
+may be a `context -> quantizer` selector. `weights` applies to the linear layers
+inside the repeated blocks.
 
 ```python
 recipe = mk.Recipe(
     weights=mk.gptq(mk.int(4, group=128)),
+    head=mk.gptq(mk.int(4, group=128)),
     acts=mk.int(4, group=None),
     kv=mk.int(4, group=64),
     transforms=[mk.rotate("hadamard")],
@@ -132,6 +170,21 @@ recipe = mk.Recipe(
 )
 quantized = mk.quantize(model, recipe, calib=calibration)
 ```
+
+`head` applies to the linear layers outside the repeated blocks, such as the
+output head of a language model, and accepts a quantizer, a selector or a
+pattern map. It is `None` by default, which leaves those layers dense. Head
+layers are rounded after every block, with statistics from complete forward
+passes of the calibration model. A parameter that shares the storage of a
+rounded head, such as a tied input embedding, takes the rounded values;
+`QModel.tied_weights` records it and checkpoints store the matrix once, as
+codes. On the two measured models an INT8 head leaves perplexity unchanged and
+a GPTQ INT4 head costs 0.16 to 0.30; see [CUDA measurements](performance.md).
+
+Built-in preset names follow `rtn-int4-g128`, `gptq-int4-g128`, `awq-int4-g128`,
+`nf4-g64`, `mxfp4-g32` and `rtn-w4a4`. `@mk.preset(name)` registers a factory
+that returns a quantizer or a `Recipe`; the name is then accepted wherever a
+recipe is.
 
 `fuse_norms` folds recognized normalization gains and biases into their readers.
 `rotate` supports recognized RMS-normalized residual architectures and installs
@@ -192,9 +245,10 @@ restored = mk.optimize(mk.load("checkpoints/experiment"), compile=True)
 
 | Feature | Current behavior |
 | --- | --- |
-| Packed scalar execution | Compatible four-bit INT and scalar-codebook codecs |
-| Single-token decoding | Fused packed CUDA matrix-vector kernel |
-| Prefill and multiple rows | CUDA reconstruction followed by matrix multiplication |
+| Packed scalar execution | Scalar-grid codecs of one to eight bits, integer or codebook |
+| Decoding of up to eight rows | Fused packed CUDA matrix-vector kernel |
+| Prefill and more rows | CUDA reconstruction followed by matrix multiplication |
+| Packed output head | Fused kernel; a tied embedding reads its rows from the same codes |
 | Compiled HF generation | Eager prefill and compiled decoding with a static KV cache |
 | Other weight formats | Reconstructed dense execution |
 | Activation quantization | Online reconstructed activations |
@@ -204,13 +258,26 @@ restored = mk.optimize(mk.load("checkpoints/experiment"), compile=True)
 Activation and KV quantization currently simulate quantization error without
 reducing activation or cache tensor storage. Online KV quantization cannot be
 combined with compiled generation yet. Packed CUDA kernels are inference-only.
-TorchAO INT4 tile-packed exports use BF16 parameters and preserve FP32 buffers.
-Output heads remain unquantized. Tile padding can increase storage for very small
+A packed layer whose rows or scale groups split a packing word keeps its packed
+storage and reconstructs the dense weight on every call; `mk.capabilities`
+reports this. `optimize(cache_dense=True)` keeps reconstructed weights resident
+for workloads dominated by prefill.
+TorchAO INT4 tile-packed exports use BF16 parameters, preserve FP32 buffers and
+leave output heads unquantized. Tile padding can increase storage for very small
 layers; `storage_bytes` includes the physical tensors inside quantized subclasses.
+
+`mk.benchmark(operation, warmup=10, repetitions=50)` synchronizes CUDA around
+every sample and reports median, minimum, 95th percentile and peak allocation.
+It runs under `torch.inference_mode`; pass `inference_mode=False` to time an
+operation that trains parameters.
 
 Checkpoints contain JSON and safetensors. Built-in scalar, vector, E8P, trellis,
 basis and channel-scale codecs store codes and parameters. Custom decoder code
 is never serialized: register it with `@mk.codec(name)` in the loading process.
+`@mk.codec(name, row_parameters=(...))` additionally names the parameters that
+hold one entry per weight row, which lets a row-separable quantizer use the
+codec for layers converted in row chunks. Loading reads tensors straight onto
+the GPU and builds a Hugging Face architecture without initializing weights.
 Unregistered formats save dense reconstructions. Built-in scalar activation and
 KV recipes round-trip; custom online callables need an explicit deployment recipe.
 Tied dense weights and identical codec parameters are stored once.
