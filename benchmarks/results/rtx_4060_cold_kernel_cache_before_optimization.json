@@ -1,0 +1,109 @@
+{
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "torch": "2.14.1+cu130",
+  "cuda": "13.0",
+  "triton": "3.8.0",
+  "measurement_date": "2026-10-01",
+  "cold_kernel_cache": true,
+  "measurements": [
+    {
+      "case": "algorithms/gptq-int4/llama-attention-2048x2048",
+      "median_ms": 20.60578000055102,
+      "minimum_ms": 20.50693500041234,
+      "percentile_95_ms": 21.261741999296646,
+      "first_call_ms": 3301.288294999722,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 71576576,
+      "parameters": {},
+      "elements_per_second": 203549877.7473039
+    },
+    {
+      "case": "algorithms/gptq-int4/llama-key_value-512x2048",
+      "median_ms": 17.352001999825006,
+      "minimum_ms": 17.254377999961434,
+      "percentile_95_ms": 18.402202999823203,
+      "first_call_ms": 2291.269854999882,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 54529024,
+      "parameters": {},
+      "elements_per_second": 60429684.13734478
+    },
+    {
+      "case": "algorithms/gptq-int4/llama-expansion-8192x2048",
+      "median_ms": 39.69660799975827,
+      "minimum_ms": 37.986106000062136,
+      "percentile_95_ms": 40.57033799927012,
+      "first_call_ms": 2324.4095589998324,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 235965440,
+      "parameters": {},
+      "elements_per_second": 422636009.6082306
+    },
+    {
+      "case": "algorithms/gptq-int4/llama-contraction-2048x8192",
+      "median_ms": 384.958548999748,
+      "minimum_ms": 382.47525400038285,
+      "percentile_95_ms": 387.43166499989456,
+      "first_call_ms": 9631.24925199918,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 872424448,
+      "parameters": {},
+      "elements_per_second": 43581876.65553307
+    },
+    {
+      "case": "algorithms/gptq-int4/qwen-attention-896x896",
+      "median_ms": 5.237053999735508,
+      "minimum_ms": 5.212518000007549,
+      "percentile_95_ms": 5.5271589999392745,
+      "first_call_ms": 1067.2569979997206,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 13768192,
+      "parameters": {},
+      "elements_per_second": 153295345.06242353
+    },
+    {
+      "case": "algorithms/gptq-int4/qwen-key_value-128x896",
+      "median_ms": 5.125704999954905,
+      "minimum_ms": 5.078546000731876,
+      "percentile_95_ms": 5.142305999470409,
+      "first_call_ms": 1089.3972439998834,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 10094592,
+      "parameters": {},
+      "elements_per_second": 22375068.405421108
+    },
+    {
+      "case": "algorithms/gptq-int4/qwen-expansion-4864x896",
+      "median_ms": 8.663668000735925,
+      "minimum_ms": 8.540878000530938,
+      "percentile_95_ms": 9.066775999599486,
+      "first_call_ms": 1068.3826929998759,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 60511232,
+      "parameters": {},
+      "elements_per_second": 503036819.92774916
+    },
+    {
+      "case": "algorithms/gptq-int4/qwen-contraction-896x4864",
+      "median_ms": 103.14259799997672,
+      "minimum_ms": 99.04880999965826,
+      "percentile_95_ms": 103.77720900032728,
+      "first_call_ms": 5775.397858999895,
+      "repetitions": 5,
+      "additional_peak_memory_bytes": 301340672,
+      "parameters": {},
+      "elements_per_second": 42253579.84487635
+    },
+    {
+      "case": "calibration/quantize/gptq-int4-4-blocks",
+      "median_ms": 705.1490579997335,
+      "minimum_ms": 703.2225650000328,
+      "percentile_95_ms": 705.6246530000863,
+      "first_call_ms": 6705.866417999459,
+      "repetitions": 3,
+      "additional_peak_memory_bytes": 385881088,
+      "parameters": {},
+      "elements_per_second": 47584878.14644813
+    }
+  ]
+}

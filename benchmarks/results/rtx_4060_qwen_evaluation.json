@@ -1,44 +1,91 @@
 {
   "model": "Qwen/Qwen2.5-0.5B",
   "torch": "2.14.1+cu130",
-  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
-  "sequence": 256,
   "cuda": "13.0",
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "dtype": "float16",
+  "sequence": 1024,
   "seed": 17,
-  "calibration_batches": 8,
-  "evaluation_batches": 16,
+  "calibration_batches": 16,
+  "evaluation_batches": 40,
   "measurements": [
     {
       "method": "baseline",
-      "perplexity": 22.26182248240305,
-      "tokens": 4080,
-      "seconds": 1.262447498000256
+      "perplexity": 14.449512938060115,
+      "tokens": 40920,
+      "seconds": 2.971152729000096
     },
     {
       "method": "rtn-int4-g128",
       "bpw": 4.125,
-      "perplexity": 28.352307184419775,
-      "tokens": 4080,
-      "quantization_seconds": 0.5034891779996542,
-      "evaluation_seconds": 0.3144714239988389
+      "model_bpw": 7.398970523347957,
+      "perplexity": 18.549688403098987,
+      "tokens": 40920,
+      "quantization_seconds": 0.3195654139999533,
+      "evaluation_seconds": 2.4882437950000167
     },
     {
       "method": "nf4-g64",
       "bpw": 4.25,
-      "perplexity": 25.834276657500325,
-      "tokens": 4080,
-      "quantization_seconds": 0.619462779000969,
-      "evaluation_seconds": 0.2962977809984295
+      "model_bpw": 7.489507675733768,
+      "perplexity": 16.087362687874045,
+      "tokens": 40920,
+      "quantization_seconds": 0.28306040200004645,
+      "evaluation_seconds": 2.50115290299982
     },
     {
       "method": "gptq-int4-g128",
       "bpw": 4.125,
-      "perplexity": 25.42750891116988,
-      "tokens": 4080,
-      "quantization_seconds": 5.568342497999765,
-      "evaluation_seconds": 0.29052993500044977
+      "model_bpw": 7.398970523347957,
+      "perplexity": 15.958976798820009,
+      "tokens": 40920,
+      "quantization_seconds": 4.398518906999925,
+      "evaluation_seconds": 2.5230607900002724
+    },
+    {
+      "method": "gptq-int4-g128-unlimited-token-energy",
+      "bpw": 4.125,
+      "model_bpw": 7.398970523347957,
+      "perplexity": 15.96847059356611,
+      "tokens": 40920,
+      "quantization_seconds": 4.093842173000667,
+      "evaluation_seconds": 2.5301682809995327
+    },
+    {
+      "method": "gptq-nf4-g64",
+      "bpw": 4.25,
+      "model_bpw": 7.489507675733768,
+      "perplexity": 15.33198657211503,
+      "tokens": 40920,
+      "quantization_seconds": 4.418978593000247,
+      "evaluation_seconds": 2.5391274630001135
+    },
+    {
+      "method": "gptq-int4-g128-activation-order",
+      "bpw": 4.132846840659341,
+      "model_bpw": 7.404653968216133,
+      "perplexity": 15.696488599174623,
+      "tokens": 40920,
+      "quantization_seconds": 4.376422350999746,
+      "evaluation_seconds": 2.5424542109994945
+    },
+    {
+      "method": "gptq-int4-g128+head-int8",
+      "bpw": 5.227391455769677,
+      "model_bpw": 5.228951679577659,
+      "perplexity": 15.961551254557143,
+      "tokens": 40920,
+      "quantization_seconds": 4.380151416999979,
+      "evaluation_seconds": 2.5440258669996183
+    },
+    {
+      "method": "gptq-int4-g128+head-gptq-int4",
+      "bpw": 4.125,
+      "model_bpw": 4.126719885916555,
+      "perplexity": 16.25953393227119,
+      "tokens": 40920,
+      "quantization_seconds": 5.202207462999468,
+      "evaluation_seconds": 2.550944714999787
     }
-  ],
-  "dtype": "float16",
-  "measurement_date": "2026-10-01"
+  ]
 }

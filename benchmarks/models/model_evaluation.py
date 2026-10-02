@@ -15,6 +15,8 @@ import torch
 
 import mlkit as mk
 
+UNLIMITED_TOKEN_ENERGY = "gptq-int4-g128-unlimited-token-energy"
+
 
 def methods() -> dict[str, Callable[[], Any]]:
     int4 = mk.int(4, group=128)
@@ -22,6 +24,7 @@ def methods() -> dict[str, Callable[[], Any]]:
         "rtn-int4-g128": lambda: int4,
         "nf4-g64": lambda: mk.nf4(group=64),
         "gptq-int4-g128": lambda: mk.gptq(int4),
+        UNLIMITED_TOKEN_ENERGY: lambda: mk.gptq(int4),
         "gptq-nf4-g64": lambda: mk.gptq(mk.nf4(group=64)),
         "gptq-int4-g128-activation-order": lambda: mk.gptq(int4, act_order=True),
         "gptq-int4-g128+head-int8": lambda: mk.Recipe(
@@ -76,7 +79,13 @@ def main() -> None:
     for name in arguments.methods:
         torch.cuda.synchronize()
         start = time.perf_counter()
-        converted = mk.quantize(model, available[name](), calib=calibration, cache_dir=None)
+        converted = mk.quantize(
+            model,
+            available[name](),
+            calib=calibration,
+            cache_dir=None,
+            token_energy_limit=None if name == UNLIMITED_TOKEN_ENERGY else 100.0,
+        )
         torch.cuda.synchronize()
         duration = time.perf_counter() - start
         score = mk.ppl(

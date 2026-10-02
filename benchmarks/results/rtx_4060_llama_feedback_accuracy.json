@@ -1,0 +1,157 @@
+{
+  "model": "meta-llama/Llama-3.2-1B",
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "torch": "2.14.1+cu130",
+  "sequence": 1024,
+  "seed": 17,
+  "calibration_batches": 16,
+  "measurements": [
+    {
+      "layer": "model.layers.0.self_attn.q_proj",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rtn": {
+        "loss": 0.0026439253706485033,
+        "seconds": 0.055315248999704636
+      },
+      "torch": {
+        "loss": 0.000616513891145587,
+        "seconds": 0.5101809380003033
+      },
+      "triton": {
+        "loss": 0.000616513891145587,
+        "seconds": 0.021427660999961518
+      },
+      "maximum_error": 0.0,
+      "different_fraction": 0.0
+    },
+    {
+      "layer": "model.layers.0.self_attn.k_proj",
+      "shape": [
+        512,
+        2048
+      ],
+      "rtn": {
+        "loss": 0.005053957458585501,
+        "seconds": 0.001016779000110546
+      },
+      "torch": {
+        "loss": 0.0011868623550981283,
+        "seconds": 0.40305384600014804
+      },
+      "triton": {
+        "loss": 0.0011868623550981283,
+        "seconds": 0.008291720999750396
+      },
+      "maximum_error": 0.0,
+      "different_fraction": 0.0
+    },
+    {
+      "layer": "model.layers.0.self_attn.v_proj",
+      "shape": [
+        512,
+        2048
+      ],
+      "rtn": {
+        "loss": 0.0001089075522031635,
+        "seconds": 0.001028792000397516
+      },
+      "torch": {
+        "loss": 3.314601053716615e-05,
+        "seconds": 0.40318381900033273
+      },
+      "triton": {
+        "loss": 3.314601053716615e-05,
+        "seconds": 0.008348867000222526
+      },
+      "maximum_error": 0.0,
+      "different_fraction": 0.0
+    },
+    {
+      "layer": "model.layers.0.self_attn.o_proj",
+      "shape": [
+        2048,
+        2048
+      ],
+      "rtn": {
+        "loss": 2.9284342417668086e-06,
+        "seconds": 0.0028377220000948
+      },
+      "torch": {
+        "loss": 6.141840458440129e-07,
+        "seconds": 0.4062506279997251
+      },
+      "triton": {
+        "loss": 6.141840458440129e-07,
+        "seconds": 0.012820711000131269
+      },
+      "maximum_error": 0.0,
+      "different_fraction": 0.0
+    },
+    {
+      "layer": "model.layers.0.mlp.gate_proj",
+      "shape": [
+        8192,
+        2048
+      ],
+      "rtn": {
+        "loss": 0.0003246155974920839,
+        "seconds": 0.011161771999923076
+      },
+      "torch": {
+        "loss": 0.0001441152417100966,
+        "seconds": 0.4207383539996954
+      },
+      "triton": {
+        "loss": 0.0001441152417100966,
+        "seconds": 0.05792277999989892
+      },
+      "maximum_error": 0.0,
+      "different_fraction": 0.0
+    },
+    {
+      "layer": "model.layers.0.mlp.up_proj",
+      "shape": [
+        8192,
+        2048
+      ],
+      "rtn": {
+        "loss": 0.0002493765205144882,
+        "seconds": 0.011127798999950755
+      },
+      "torch": {
+        "loss": 0.00011157171684317291,
+        "seconds": 0.44058305700036726
+      },
+      "triton": {
+        "loss": 0.00011157171684317291,
+        "seconds": 0.04463522700007161
+      },
+      "maximum_error": 0.0,
+      "different_fraction": 0.0
+    },
+    {
+      "layer": "model.layers.0.mlp.down_proj",
+      "shape": [
+        2048,
+        8192
+      ],
+      "rtn": {
+        "loss": 1.0799407391459681e-05,
+        "seconds": 0.04020073199990293
+      },
+      "torch": {
+        "loss": 2.669361720109009e-06,
+        "seconds": 2.1390674069998568
+      },
+      "triton": {
+        "loss": 2.669361720109009e-06,
+        "seconds": 0.16809671400005755
+      },
+      "maximum_error": 0.0,
+      "different_fraction": 0.0
+    }
+  ]
+}
