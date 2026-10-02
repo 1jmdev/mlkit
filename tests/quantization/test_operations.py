@@ -157,3 +157,14 @@ def test_scalar_kmeans_keeps_the_center_of_an_empty_cluster() -> None:
     samples = torch.tensor([1.0, 1.0, 1.0, 1.0])
     centers = mk.kmeans(samples, k=2, iters=3)
     assert torch.equal(centers, torch.tensor([1.0, 1.0]))
+
+
+def test_uniform_initialization_is_independent_of_the_seed() -> None:
+    samples = torch.randn(4096)
+    first = mk.kmeans(samples, k=8, iters=5, seed=1, init="uniform")
+    second = mk.kmeans(samples, k=8, iters=5, seed=2, init="uniform")
+    assert torch.equal(first, second)
+    random = mk.kmeans(samples, k=8, iters=5, seed=1)
+    assert not torch.equal(first, random)
+    with pytest.raises(ValueError, match="uniform for scalar"):
+        mk.kmeans(torch.randn(64, 2), k=4, init="uniform")

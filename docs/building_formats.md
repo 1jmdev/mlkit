@@ -90,7 +90,7 @@ class LearnedCodebook(mk.Quantizer):
 
     def fit(self, weight, context):
         normalized = weight / weight.abs().amax(1, keepdim=True).clamp_min(1e-12)
-        centers = mk.kmeans(normalized.flatten(), 2**self.bits, iters=10)
+        centers = mk.kmeans(normalized.flatten(), 2**self.bits, init="uniform")
         context.add_bits(16 * centers.numel())
         grid = mk.grid.values(centers, bits=self.bits)
         rounder = mk.scaled(grid, group=self.group).fit(weight, context)

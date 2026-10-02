@@ -15,9 +15,13 @@ def kmeans(
     iters: int = 20,
     seed: int = 0,
     chunk: int | None = None,
+    init: str = "random",
 ) -> Tensor:
     """Deterministic weighted Lloyd iterations for scalar or vector codebooks.
 
+    ``init="random"`` starts from ``k`` samples drawn with ``seed``.
+    ``init="uniform"`` starts scalar centers evenly spaced over the sample range,
+    which does not depend on a seed and converges to a lower error on average.
     Scalar codebooks of at most 256 centers are fitted on CUDA by a fused kernel.
     A cluster that receives no samples keeps its center.
     """
@@ -25,12 +29,18 @@ def kmeans(
     samples = value.reshape(-1, 1) if scalar else value
     if samples.ndim != 2 or not 1 <= k <= len(samples) or iters < 1:
         raise ValueError("kmeans requires a matrix, 1 <= k <= sample count, and iters >= 1")
+    if init not in {"random", "uniform"} or (init == "uniform" and not scalar):
+        raise ValueError("init must be random, or uniform for scalar samples")
     samples = samples.float()
     if not torch.isfinite(samples).all():
         raise ValueError("kmeans samples must be finite")
-    generator = torch.Generator(device=value.device).manual_seed(seed)
-    initial = torch.randperm(len(samples), device=value.device, generator=generator)[:k]
-    centers = samples[initial].clone()
+    if init == "uniform":
+        minimum, maximum = samples.aminmax()
+        centers = torch.linspace(float(minimum), float(maximum), k, device=value.device)[:, None]
+    else:
+        generator = torch.Generator(device=value.device).manual_seed(seed)
+        initial = torch.randperm(len(samples), device=value.device, generator=generator)[:k]
+        centers = samples[initial].clone()
     importance = torch.ones(len(samples), device=value.device) if weights is None else weights
     importance = importance.reshape(-1).to(device=value.device, dtype=torch.float32)
     if (

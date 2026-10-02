@@ -19,8 +19,9 @@ class LearnedCodebook(mk.Quantizer):
         scales = mk.absmax(grouped).half().float()
         normalized = (grouped / scales).flatten()
         importance = context.H.diagonal().expand_as(weight).flatten()
-        codebook = mk.kmeans(normalized, k=2**self.bits, weights=importance,
-                             iters=10, seed=context.rng.initial_seed()).half().float()
+        codebook = mk.kmeans(
+            normalized, k=2**self.bits, weights=importance, iters=20, init="uniform"
+        ).half().float()
         context.add_bits(16 * codebook.numel())
         format = mk.scaled(mk.grid.values(codebook, bits=self.bits), group=self.group,
                            scale=lambda values: mk.absmax(values))
