@@ -61,7 +61,7 @@ def decode_grouped(
     return reconstruction if zero is None else reconstruction + zero[:, columns]
 
 
-@codec("scaled")
+@codec("scaled", row_parameters=("scales", "zero"))
 def decode_scaled(
     codes: Tensor,
     *,
@@ -78,7 +78,7 @@ def decode_scaled(
     return reconstruction if zero is None else reconstruction + zero[:, columns]
 
 
-@codec("feedback")
+@codec("feedback", row_parameters=("scales", "zero"))
 def decode_feedback(
     codes: Tensor,
     *,
@@ -101,8 +101,8 @@ def decode_feedback(
     return reconstruction if permutation is None else reconstruction[:, permutation.argsort()]
 
 
-@codec("vector_feedback")
-@codec("vector_scaled")
+@codec("vector_feedback", row_parameters=("scales", "zero"))
+@codec("vector_scaled", row_parameters=("scales", "zero"))
 def decode_vector_scaled(
     codes: Tensor,
     *,

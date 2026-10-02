@@ -87,7 +87,14 @@ class FittedRounder:
 
 
 class Quantizer:
-    """Optional fitting protocol for algorithms that round narrow column slices."""
+    """Optional fitting protocol for algorithms that round narrow column slices.
+
+    ``row_separable`` declares that rounding a matrix equals rounding its rows
+    separately, with side information that does not depend on the rows. Layers
+    too wide to round at once are then converted in row chunks.
+    """
+
+    row_separable = False
 
     def fit(self, w: Tensor, ctx: Ctx) -> Callable[[Tensor, slice], Q]:
         raise NotImplementedError

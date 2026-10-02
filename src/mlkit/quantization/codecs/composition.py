@@ -1,11 +1,12 @@
 """Flattened composition of portable codecs with basis changes and channel scales."""
 
+from collections.abc import Sequence
 from typing import Any
 
 import torch
 from torch import Tensor
 
-from mlkit.quantization.codecs.registry import codec, decoder, registered
+from mlkit.quantization.codecs.registry import codec, decoder, registered, row_parameters
 from mlkit.quantization.operations.orthogonal_transforms import structured_transform
 from mlkit.quantization.representation import Q
 
@@ -80,4 +81,36 @@ def compose(quantized: Q, name: str, parameters: dict[str, Any]) -> Q:
         codec=name,
         bits=quantized.bits,
         metadata=metadata,
+    )
+
+
+def concatenate_rows(parts: Sequence[Q]) -> Q:
+    """Join the representations of consecutive row chunks of one matrix.
+
+    Parts without codes are joined as dense reconstructions. Parts with codes
+    need a codec that declares its row parameters.
+    """
+    first = parts[0]
+    bits = None
+    if all(part.bits is not None for part in parts):
+        bits = sum(part.bits for part in parts if part.bits is not None)
+    if any(part.codes is None for part in parts):
+        return Q(torch.cat([part.w for part in parts]), bits=bits)
+    names = row_parameters(first.codec)
+    if names is None:
+        raise ValueError(
+            f"codec {first.codec!r} does not declare row parameters, so a row-separable "
+            "quantizer cannot use it; register it with mk.codec(name, row_parameters=...)"
+        )
+    parameters = dict(first.params)
+    for name in names:
+        if isinstance(first.params.get(name), Tensor):
+            parameters[name] = torch.cat([part.params[name] for part in parts])
+    return Q(
+        codes=torch.cat([part.codes for part in parts if part.codes is not None]),
+        params=parameters,
+        decode=first.decode,
+        codec=first.codec,
+        bits=bits,
+        metadata=first.metadata,
     )

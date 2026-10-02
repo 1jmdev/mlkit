@@ -14,6 +14,10 @@ class RoundToNearest(Quantizer):
     def __call__(self, w: Tensor, ctx: Ctx | None = None) -> Q:
         return as_q(self.inner(w, ctx or Ctx(device=w.device)))
 
+    @property
+    def row_separable(self) -> bool:  # type: ignore[override]
+        return bool(getattr(self.inner, "row_separable", False))
+
     def __repr__(self) -> str:
         return f"rtn({self.inner!r})"
 

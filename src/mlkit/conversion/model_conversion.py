@@ -25,11 +25,15 @@ from mlkit.models.architecture import (
 from mlkit.models.model import Model, QModel
 from mlkit.models.module_utilities import weight_name
 from mlkit.models.reports import LayerReport
+from mlkit.quantization.codecs import concatenate_rows
 from mlkit.quantization.context import Ctx
 from mlkit.quantization.operations.losses import proxy_loss
 from mlkit.quantization.recipes import Recipe, normalize_recipe
 from mlkit.quantization.representation import as_q
 from mlkit.timing import synchronize
+
+CHUNKED_CONVERSION_ELEMENTS = 2**26
+ROW_CHUNK_ELEMENTS = 2**25
 
 
 def quantize(
@@ -169,27 +173,44 @@ def convert_layer(
     *,
     retain_device: bool,
 ) -> None:
-    """Round one layer in place and record its representation and report."""
-    weight = layer.weight.detach().float()
-    synchronize(weight.device)
+    """Round one layer in place and record its representation and report.
+
+    A layer above ``CHUNKED_CONVERSION_ELEMENTS`` is rounded in row chunks when its
+    quantizer is row separable, so that an output head with a large vocabulary
+    needs working memory for one chunk only. Side information declared through
+    the context is counted once, from the first chunk.
+    """
+    rows, width = layer.weight.shape
+    rows_per_chunk = rows
+    if getattr(quantization, "row_separable", False) and rows * width > CHUNKED_CONVERSION_ELEMENTS:
+        rows_per_chunk = max(1, ROW_CHUNK_ELEMENTS // width)
+    synchronize(layer.weight.device)
     start = time.perf_counter()
+    parts = []
+    loss = 0.0
     with torch.no_grad():
-        result = as_q(quantization(weight, context))
-        reconstruction = result.w
-        if reconstruction.shape != weight.shape or not torch.isfinite(reconstruction).all():
-            raise ValueError(f"quantizer returned an invalid reconstruction for {name}")
-        known_hessian = context._stats.get("H")
-        loss_context = Ctx(H=known_hessian) if known_hessian is not None else None
-        loss = float(proxy_loss(weight, reconstruction, loss_context))
-        layer.weight.copy_(reconstruction.to(layer.weight.dtype))
-    synchronize(weight.device)
+        for first_row in range(0, rows, rows_per_chunk):
+            last_row = min(rows, first_row + rows_per_chunk)
+            weight = layer.weight[first_row:last_row].detach().float()
+            part = as_q(quantization(weight, context if first_row == 0 else context.replace()))
+            reconstruction = part.w
+            if reconstruction.shape != weight.shape or not torch.isfinite(reconstruction).all():
+                raise ValueError(f"quantizer returned an invalid reconstruction for {name}")
+            known_hessian = context._stats.get("H")
+            loss_context = Ctx(H=known_hessian) if known_hessian is not None else None
+            share = (last_row - first_row) / rows
+            loss += float(proxy_loss(weight, reconstruction, loss_context)) * share
+            layer.weight[first_row:last_row].copy_(reconstruction.to(layer.weight.dtype))
+            parts.append(part if retain_device else part.to("cpu", detach=True))
+            del part, reconstruction, weight
+    result = parts[0] if len(parts) == 1 else concatenate_rows(parts)
+    synchronize(layer.weight.device)
     duration = time.perf_counter() - start
     bits = None if result.bits is None else result.bits + context._additional_bits
     result.bits = bits
-    converted.quantized[name] = result if retain_device else result.to("cpu", detach=True)
+    converted.quantized[name] = result
     converted.layer_reports.append(LayerReport(
-        name, (weight.shape[0], weight.shape[1]), bits,
-        weight.numel(), loss, duration, repr(quantization),
+        name, (rows, width), bits, rows * width, loss, duration, repr(quantization),
     ))
 
 

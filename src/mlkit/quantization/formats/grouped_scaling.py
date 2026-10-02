@@ -58,6 +58,8 @@ class Scaled(Quantizer):
     fitted and encoded by fused kernels that reproduce the tensor reference exactly.
     """
 
+    row_separable = True
+
     def __init__(
         self,
         grid: Grid,

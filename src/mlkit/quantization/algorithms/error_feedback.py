@@ -462,6 +462,10 @@ class ErrorFeedback(Quantizer):
                 else:
                     corrections[:, local_stop:] += deviation @ block_coefficients
 
+    @property
+    def row_separable(self) -> bool:  # type: ignore[override]
+        return bool(getattr(self.inner, "row_separable", False))
+
     def __repr__(self) -> str:
         return f"ldlq({self.inner!r}, step={self.step}, refit={self.refit})"
 
