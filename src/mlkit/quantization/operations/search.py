@@ -3,12 +3,21 @@
 import torch
 from torch import Tensor
 
+from mlkit.kernels import scalar_encode
+
 
 def snap(value: Tensor, codebook: Tensor) -> Tensor:
-    """Find the nearest scalar entry without an elements-by-codebook temporary."""
+    """Find the nearest scalar entry without an elements-by-codebook temporary.
+
+    Ties select the lower entry. FP32 CUDA tensors that do not track gradients
+    are rounded by a fused kernel.
+    """
     codebook = codebook.to(device=value.device, dtype=value.dtype).flatten().sort().values
     if codebook.numel() == 0:
         raise ValueError("codebook cannot be empty")
+    differentiable = torch.is_grad_enabled() and (value.requires_grad or codebook.requires_grad)
+    if value.is_cuda and value.dtype == torch.float32 and not differentiable and value.numel():
+        return scalar_encode.snap(value.contiguous(), codebook)
     upper = torch.searchsorted(codebook, value.contiguous()).clamp_max(codebook.numel() - 1)
     lower = (upper - 1).clamp_min(0)
     return torch.where(

@@ -23,6 +23,7 @@ from mlkit.kernels.scalar_rounding import (
 ROW_TILE = 8
 MAXIMUM_TILE = 128
 MINIMUM_TILE = 8
+SNAP_BLOCK = 1024
 
 ENCODE_RUNTIME_ARGUMENTS = [
     "value",
@@ -301,3 +302,38 @@ def search_scales(
         enable_fp_fusion=False,
     )
     return selected
+
+
+@triton.jit(
+    do_not_specialize=["value", "values", "output", "count"],
+    do_not_specialize_on_alignment=["value", "values", "output", "count"],
+)
+def snap_to_codebook(
+    value,
+    values,
+    output,
+    count,
+    codebook_size: tl.constexpr,
+    search_steps: tl.constexpr,
+    block: tl.constexpr,
+):
+    positions = tl.program_id(0).to(tl.int64) * block + tl.arange(0, block)
+    valid = positions < count
+    samples = tl.load(value + positions, valid, other=0)
+    index = nearest_codebook_index(samples, values, codebook_size, search_steps)
+    tl.store(output + positions, tl.load(values + index), valid)
+
+
+def snap(value: Tensor, values: Tensor) -> Tensor:
+    """The nearest entry of an ascending codebook for every element of ``value``."""
+    output = torch.empty_like(value)
+    snap_to_codebook[(triton.cdiv(value.numel(), SNAP_BLOCK),)](
+        value,
+        values,
+        output,
+        value.numel(),
+        values.numel(),
+        search_steps_for(values.numel()),
+        SNAP_BLOCK,
+    )
+    return output
