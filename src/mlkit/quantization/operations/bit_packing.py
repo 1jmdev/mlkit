@@ -44,19 +44,24 @@ def pack_within_bytes(flattened: Tensor, bits: int) -> Tensor:
 
 
 def pack_across_bytes(flattened: Tensor, bits: int) -> Tensor:
-    """Pack precisions whose codes cross byte boundaries, one periodic group at a time."""
+    """Pack precisions whose codes cross byte boundaries, one periodic group at a time.
+
+    Below eight bits the arithmetic stays in bytes, where a left shift discards
+    the bits that belong to the next byte.
+    """
     count = flattened.numel()
     bytes_per_group = bits // math.gcd(bits, 8)
     codes_per_group = 8 // math.gcd(bits, 8)
     padding = (-count) % codes_per_group
     if padding:
         flattened = torch.cat((flattened, flattened.new_zeros(padding)))
-    grouped = flattened.reshape(-1, codes_per_group).to(torch.int32)
-    output = torch.zeros(
+    narrow = bits < 8
+    grouped = flattened.reshape(-1, codes_per_group).to(torch.uint8 if narrow else torch.int32)
+    output = torch.empty(
         (len(grouped), bytes_per_group), dtype=torch.uint8, device=flattened.device
     )
     for byte in range(bytes_per_group):
-        assembled = torch.zeros(len(grouped), dtype=torch.int32, device=flattened.device)
+        assembled = None
         for column in range(codes_per_group):
             shift = column * bits - byte * 8
             if shift >= 8 or shift <= -bits:
@@ -64,8 +69,11 @@ def pack_across_bytes(flattened: Tensor, bits: int) -> Tensor:
             contribution = (
                 grouped[:, column] << shift if shift >= 0 else grouped[:, column] >> -shift
             )
-            assembled |= contribution & 255
-        output[:, byte] = assembled.to(torch.uint8)
+            if not narrow:
+                contribution &= 255
+            assembled = contribution if assembled is None else assembled.bitwise_or_(contribution)
+        assert assembled is not None
+        output[:, byte] = assembled
     return output.flatten()[: math.ceil(count * bits / 8)]
 
 
@@ -94,8 +102,9 @@ def unpack(packed: Tensor, bits: int, shape: tuple[int, ...]) -> Tensor:
 def unpack_across_bytes(stream: Tensor, bits: int, count: int) -> Tensor:
     """Decode precisions whose codes cross byte boundaries, one periodic group at a time.
 
-    Every code is read through a three-byte window. A code never leaves its
-    group, and two zero guard bytes per group keep the window in range.
+    A code of fewer than eight bits spans at most two bytes of its group and is
+    assembled in byte arithmetic. A wider code is read through a three-byte
+    window; two zero guard bytes per group keep the window in range.
     """
     bytes_per_group = bits // math.gcd(bits, 8)
     codes_per_group = 8 // math.gcd(bits, 8)
@@ -103,12 +112,24 @@ def unpack_across_bytes(stream: Tensor, bits: int, count: int) -> Tensor:
     if padding:
         stream = torch.cat((stream, stream.new_zeros(padding)))
     groups = stream.reshape(-1, bytes_per_group)
+    mask = 2**bits - 1
+    if bits < 8:
+        output = torch.empty(
+            (len(groups), codes_per_group), dtype=torch.uint8, device=stream.device
+        )
+        for column in range(codes_per_group):
+            byte, shift = divmod(column * bits, 8)
+            code = groups[:, byte] >> shift
+            if shift + bits > 8:
+                code.bitwise_or_(groups[:, byte + 1] << (8 - shift))
+            output[:, column] = code.bitwise_and_(mask)
+        return output.flatten()[:count]
     grouped = torch.cat((groups, groups.new_zeros(len(groups), 2)), dim=1).to(torch.int32)
-    storage_dtype = torch.uint8 if bits <= 8 else torch.int32
-    output = torch.empty((len(grouped), codes_per_group), dtype=storage_dtype, device=stream.device)
+    output = torch.empty(
+        (len(grouped), codes_per_group), dtype=torch.int32, device=stream.device
+    )
     for column in range(codes_per_group):
-        position = column * bits
-        byte, shift = position // 8, position % 8
+        byte, shift = divmod(column * bits, 8)
         window = grouped[:, byte] | (grouped[:, byte + 1] << 8) | (grouped[:, byte + 2] << 16)
-        output[:, column] = ((window >> shift) & (2**bits - 1)).to(storage_dtype)
+        output[:, column] = (window >> shift) & mask
     return output.flatten()[:count]
