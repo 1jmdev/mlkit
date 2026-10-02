@@ -44,6 +44,12 @@ def device_points(device: torch.device, *, absolute: bool = False) -> Tensor:
     return (absolute_points() if absolute else e8p_points()).to(device)
 
 
+@functools.lru_cache(maxsize=8)
+def device_table(device: torch.device) -> Tensor:
+    """The 65,536 lattice points followed by the 256 magnitude patterns that generate them."""
+    return torch.cat((e8p_points(), absolute_points())).to(device).contiguous()
+
+
 def nearest_e8p(
     value: Tensor, *, chunk: int = 512, return_indices: bool = False, backend: str = "auto",
 ) -> Tensor:

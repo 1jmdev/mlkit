@@ -31,6 +31,25 @@ class ScalarRounding:
     metadata: dict[str, Any]
 
 
+@dataclasses.dataclass
+class VectorRounding:
+    """The fitted state of a scaled vector grid, sufficient for fused CUDA rounding.
+
+    ``codebook`` holds the reconstruction of every code. ``lattice`` marks the E8P
+    table, in which the 256 magnitude patterns follow the ``codebook_size`` points.
+    ``bits`` is the logical cost of the complete fitted region, including scales.
+    """
+
+    grid: Grid
+    scales: Tensor
+    group: int
+    codebook: Tensor
+    codebook_size: int
+    lattice: bool
+    bits: float
+    metadata: dict[str, Any]
+
+
 class FittedRounder:
     """A callable fitted format retaining optional native CUDA rounding information."""
 
@@ -39,9 +58,11 @@ class FittedRounder:
         function: Callable[[Tensor, slice], Q],
         *,
         scalar: ScalarRounding | None = None,
+        vector: VectorRounding | None = None,
     ) -> None:
         self.function = function
         self.scalar = scalar
+        self.vector = vector
 
     @property
     def scalar_grid(self) -> Grid | None:
@@ -59,7 +80,10 @@ class FittedRounder:
         scalar = self.scalar
         if scalar is not None:
             scalar = dataclasses.replace(scalar, metadata=scalar.metadata | metadata)
-        return FittedRounder(round_columns, scalar=scalar)
+        vector = self.vector
+        if vector is not None:
+            vector = dataclasses.replace(vector, metadata=vector.metadata | metadata)
+        return FittedRounder(round_columns, scalar=scalar, vector=vector)
 
 
 class Quantizer:

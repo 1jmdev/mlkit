@@ -13,9 +13,9 @@ from mlkit.quantization.codecs.scaled import decode_scaled, decode_vector_scaled
 from mlkit.quantization.context import Ctx
 from mlkit.quantization.formats.scale_storage import SCALE_FORMAT_BITS, store_scale
 from mlkit.quantization.grids import Grid
-from mlkit.quantization.grids.lattice import nearest_e8p
+from mlkit.quantization.grids.lattice import device_table, nearest_e8p
 from mlkit.quantization.operations.search import nearest
-from mlkit.quantization.protocol import FittedRounder, Quantizer, ScalarRounding
+from mlkit.quantization.protocol import FittedRounder, Quantizer, ScalarRounding, VectorRounding
 from mlkit.quantization.representation import Q
 
 FUSED_CODEBOOK_LIMIT = 256
@@ -187,6 +187,24 @@ class Scaled(Quantizer):
                     "trainable": ["scales"] + (["zero"] if zero is not None else []),
                 },
             )
+        vector = None
+        vector_metadata = {
+            "code_bits": self.grid.bits,
+            "scale_fmt": self.scale_fmt,
+            "trainable": ["scales"],
+        }
+        if self.grid.dim > 1 and values is not None and w.is_cuda:
+            lattice = self.grid.name == "e8p"
+            vector = VectorRounding(
+                grid=self.grid,
+                scales=scales,
+                group=group,
+                codebook=device_table(w.device) if lattice else self.values_on(w.device),
+                codebook_size=len(values),
+                lattice=lattice,
+                bits=self.grid.bits * w.numel() / self.grid.dim + side_bits,
+                metadata=vector_metadata,
+            )
 
         def round_columns(value: Tensor, columns: slice) -> Q:
             start, stop, stride = columns.indices(width)
@@ -243,11 +261,7 @@ class Scaled(Quantizer):
                         },
                         decode=decode_vector_scaled,
                         codec="vector_scaled",
-                        metadata={
-                            "code_bits": self.grid.bits,
-                            "scale_fmt": self.scale_fmt,
-                            "trainable": ["scales"],
-                        },
+                        metadata=vector_metadata,
                     )
                 rounded = self.grid(normalized.reshape(-1, self.grid.dim)).reshape_as(value)
             reconstruction = rounded * local_scales
@@ -255,7 +269,7 @@ class Scaled(Quantizer):
                 reconstruction = reconstruction + zero[:, positions]
             return Q(reconstruction, bits=bits)
 
-        return FittedRounder(round_columns, scalar=scalar)
+        return FittedRounder(round_columns, scalar=scalar, vector=vector)
 
     def _initial_scales(self, weight: Tensor, group: int) -> tuple[Tensor, Tensor | None]:
         """Unrounded group scales and offsets from the range of each group."""

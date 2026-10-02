@@ -15,7 +15,7 @@ from typing import Any
 import torch
 from torch import Tensor
 
-from mlkit.kernels.error_feedback import round_tile
+from mlkit.kernels.error_feedback import round_tile, round_vector_tile
 from mlkit.quantization.codecs import decode_feedback, decode_trellis, decode_vector_scaled
 from mlkit.quantization.context import Ctx
 from mlkit.quantization.protocol import (
@@ -23,11 +23,14 @@ from mlkit.quantization.protocol import (
     Quantizer,
     QuantizerFunction,
     ScalarRounding,
+    VectorRounding,
     fit_quantizer,
 )
 from mlkit.quantization.representation import Q, as_q
 
 FUSED_CODEBOOK_LIMIT = 256
+FUSED_VECTOR_DIMENSIONS = {2, 4, 8, 16}
+FUSED_VECTOR_CODEBOOK_LIMIT = 65536
 # cuSOLVER factors column-major matrices. From this width upward the upper factorization
 # is faster, and its transpose is already the row-major lower factor that kernels read.
 UPPER_FACTORIZATION_WIDTH = 4096
@@ -129,6 +132,23 @@ class CodecAccumulator:
         if scalar.zero is not None:
             self.zeros.append(scalar.zero)
         self.add_bits(scalar.bits)
+        return self.codes
+
+    def begin_vector_region(self, vector: VectorRounding) -> Tensor:
+        """Record a region rounded in blocks by the fused kernel and return its code matrix."""
+        dimension = vector.grid.dim
+        if self.codes is None:
+            self.codes = torch.empty(
+                (self.rows, self.width // dimension), dtype=torch.int32, device=self.device
+            )
+            self.parameters = {
+                "values": None if vector.lattice else vector.codebook,
+                "group": vector.group,
+                "dim": dimension,
+            }
+            self.metadata = vector.metadata
+        self.scales.append(vector.scales)
+        self.add_bits(vector.bits)
         return self.codes
 
     def add_block(
@@ -283,11 +303,35 @@ class ErrorFeedback(Quantizer):
             del targets
             if fitted_context is not ctx:
                 ctx.add_bits(fitted_context.additional_bits)
-            scalar = self._fused_rounding(rounder, w.device)
-            encoded = None if scalar is None else accumulator.begin_scalar_region(scalar)
+            fused = self._fused_rounding(rounder, w.device)
+            scalar = fused if isinstance(fused, ScalarRounding) else None
+            vector = fused if isinstance(fused, VectorRounding) else None
+            encoded = None
+            if scalar is not None:
+                encoded = accumulator.begin_scalar_region(scalar)
+            elif vector is not None:
+                encoded = accumulator.begin_vector_region(vector)
             for tile_start in range(region_start, region_stop, self.block_size):
                 tile_stop = min(region_stop, tile_start + self.block_size)
-                if scalar is not None:
+                if vector is not None:
+                    assert encoded is not None
+                    round_vector_tile(
+                        original,
+                        feedback,
+                        coefficients,
+                        vector.scales,
+                        vector.codebook,
+                        output,
+                        encoded,
+                        region_start=region_start,
+                        tile_start=tile_start,
+                        tile_width=tile_stop - tile_start,
+                        group=vector.group,
+                        dimension=vector.grid.dim,
+                        codebook_size=vector.codebook_size,
+                        lattice=vector.lattice,
+                    )
+                elif scalar is not None:
                     assert encoded is not None
                     round_tile(
                         original,
@@ -351,20 +395,37 @@ class ErrorFeedback(Quantizer):
         self,
         rounder: Callable[[Tensor, slice], Q],
         device: torch.device,
-    ) -> ScalarRounding | None:
-        """The fitted scalar state when the fused CUDA kernel can round this region."""
-        scalar = rounder.scalar if isinstance(rounder, FittedRounder) else None
-        supported = (
+    ) -> ScalarRounding | VectorRounding | None:
+        """The fitted state when a fused CUDA kernel can round this region.
+
+        Scalar grids are rounded one column at a time. Vector grids are rounded in
+        blocks, which requires a step equal to the grid dimension.
+        """
+        fitted = rounder if isinstance(rounder, FittedRounder) else None
+        available = fitted is not None and device.type == "cuda" and self.backend != "torch"
+        scalar = fitted.scalar if fitted is not None and available else None
+        if (
             scalar is not None
-            and device.type == "cuda"
-            and self.backend != "torch"
             and self.step == 1
             and scalar.grid.bits <= 8
             and 1 <= scalar.values.numel() <= FUSED_CODEBOOK_LIMIT
-        )
-        if self.backend == "triton" and not supported:
-            raise ValueError("fused GPTQ requires CUDA, step=1, and a native scalar rounder")
-        return scalar if supported else None
+        ):
+            return scalar
+        vector = fitted.vector if fitted is not None and available else None
+        if (
+            vector is not None
+            and self.step == vector.grid.dim
+            and vector.grid.dim in FUSED_VECTOR_DIMENSIONS
+            and vector.codebook_size <= FUSED_VECTOR_CODEBOOK_LIMIT
+            and vector.scales.dtype == torch.float32
+        ):
+            return vector
+        if self.backend == "triton":
+            raise ValueError(
+                "fused error feedback requires CUDA and a native scalar rounder with step=1, "
+                "or a native vector rounder with step equal to its dimension"
+            )
+        return None
 
     def _round_tile(
         self,

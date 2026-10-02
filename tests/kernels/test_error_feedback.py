@@ -61,3 +61,58 @@ def test_fitted_class_preserves_fused_rounding_and_metadata() -> None:
     assert actual.metadata == expected.metadata
     assert actual.metadata["trainable"] == ["scales", "values"]
     assert fused_context.additional_bits == reference_context.additional_bits == 144
+
+
+def vector_formats() -> dict[str, tuple[mk.Quantizer, int]]:
+    generator = torch.Generator(device="cuda").manual_seed(83)
+    octets = torch.randn(256, 8, generator=generator)
+    quadruples = torch.randn(600, 4, generator=generator)
+    return {
+        "lattice": (mk.scaled(mk.grid.e8p(), group=None), 8),
+        "grouped-lattice": (mk.scaled(mk.grid.e8p(), group=32), 8),
+        "octets": (mk.scaled(mk.grid.vector(octets), group=None), 8),
+        "quadruples": (mk.scaled(mk.grid.vector(quadruples), group=16), 4),
+    }
+
+
+@pytest.mark.parametrize("name", ["lattice", "grouped-lattice", "octets", "quadruples"])
+@pytest.mark.parametrize("refit", [32, None])
+def test_fused_vector_feedback_matches_reference_rounding(name: str, refit: int | None) -> None:
+    format, dimension = vector_formats()[name]
+    weights, inputs = calibrated_layer()
+    context = mk.Ctx(X=inputs)
+    expected = mk.ldlq(format, step=dimension, refit=refit, backend="torch")(weights, context)
+    actual = mk.ldlq(format, step=dimension, refit=refit, backend="triton")(weights, context)
+    assert actual.codec == expected.codec == "vector_feedback"
+    assert actual.codes.dtype == expected.codes.dtype
+    assert actual.bits == pytest.approx(expected.bits)
+    assert actual.metadata == expected.metadata
+    # Feedback sums are ordered differently, so a rare near tie may select another codeword.
+    assert (actual.codes == expected.codes).float().mean() > 0.99
+    hessian = context.H
+    torch.testing.assert_close(
+        mk.proxy_loss(weights, actual.w, hessian),
+        mk.proxy_loss(weights, expected.w, hessian),
+        rtol=1e-2,
+        atol=0,
+    )
+
+
+def test_fused_vector_feedback_requires_a_step_of_the_grid_dimension() -> None:
+    format, _ = vector_formats()["lattice"]
+    weights, inputs = calibrated_layer()
+    context = mk.Ctx(X=inputs)
+    with pytest.raises(ValueError, match="step equal to its dimension"):
+        mk.ldlq(format, step=16, refit=None, backend="triton")(weights, context)
+    result = mk.ldlq(format, step=16, refit=None)(weights, context)
+    assert result.codec == "vector_feedback"
+
+
+def test_fused_vector_feedback_reduces_the_loss_of_direct_rounding() -> None:
+    format, dimension = vector_formats()["lattice"]
+    weights, inputs = calibrated_layer()
+    context = mk.Ctx(X=inputs)
+    direct = format(weights, context)
+    result = mk.ldlq(format, step=dimension, refit=None)(weights, context)
+    hessian = context.H
+    assert mk.proxy_loss(weights, result.w, hessian) < mk.proxy_loss(weights, direct.w, hessian)

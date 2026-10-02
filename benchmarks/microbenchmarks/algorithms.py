@@ -3,11 +3,14 @@
 from collections.abc import Callable
 from typing import Any
 
+import torch
+
 import mlkit as mk
 from benchmarks.harness import (
     LLAMA_SHAPES,
     QWEN_SHAPES,
     Case,
+    seeded_generator,
     synthetic_inputs,
     synthetic_weight,
 )
@@ -38,6 +41,11 @@ def calibrated(
     return prepare
 
 
+def vector_feedback() -> mk.Quantizer:
+    codebook = torch.randn(256, 8, device="cuda", generator=seeded_generator(47))
+    return mk.ldlq(mk.scaled(mk.grid.vector(codebook), group=None), step=8, refit=None)
+
+
 def cases() -> list[Case]:
     int4 = mk.int(4, group=128)
     selected: list[tuple[str, Callable[[], mk.Quantizer], tuple[int, int], int]] = []
@@ -63,6 +71,10 @@ def cases() -> list[Case]:
         ("gptq-int3/llama-attention", lambda: mk.gptq(mk.int(3, group=128)), attention, 5),
         ("ldlq-e8p-step8/llama-attention",
          lambda: mk.ldlq(mk.scaled(mk.grid.e8p(), group=None), step=8, refit=None), attention, 3),
+        ("ldlq-vector8-256-step8/llama-attention", vector_feedback, attention, 3),
+        ("ldlq-e8p-step16-reference/llama-key_value",
+         lambda: mk.ldlq(mk.scaled(mk.grid.e8p(), group=None), step=16, refit=None),
+         key_value, 3),
         ("ldlq-trellis-l8-step16/llama-key_value",
          lambda: mk.ldlq(mk.trellis(L=8), step=16, refit=None), key_value, 3),
         ("awq-int4-grid20/llama-attention", lambda: mk.awq(int4, grid=20), attention, 3),
