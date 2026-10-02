@@ -21,7 +21,8 @@ class Recipe:
     ``head`` selects the format of linear layers outside them, such as the output
     head of a language model; it is ``None`` by default, which leaves them dense.
     Both accept a quantizer, a function of the layer context, or a mapping from
-    layer name patterns to either.
+    layer name patterns to either. In a model without repeated blocks, a layer
+    named like an output head follows ``head`` unless ``weights`` is a mapping.
     """
 
     weights: Any = None
@@ -43,7 +44,7 @@ class Recipe:
                     return resolve_selector(quantization, ctx)
             return None
         if name.split(".")[-1] in {"lm_head", "embed_out", "output"}:
-            return None
+            return self.select_head(name, ctx)
         return resolve_selector(self.weights, ctx)
 
     def select_head(self, name: str, ctx: Ctx) -> Any:

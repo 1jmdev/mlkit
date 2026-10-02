@@ -106,3 +106,21 @@ def test_untied_embedding_remains_dense() -> None:
     assert torch.equal(
         packed.module.model.embed_tokens.weight, original.model.embed_tokens.weight
     )
+
+
+def test_head_of_a_model_without_blocks_follows_the_head_recipe() -> None:
+    class Flat(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.projection = torch.nn.Linear(32, 32)
+            self.lm_head = torch.nn.Linear(32, 16)
+
+        def forward(self, inputs):
+            return self.lm_head(self.projection(inputs))
+
+    skipped = mk.quantize(Flat(), mk.int(4, group=16), calib=None)
+    assert list(skipped.quantized) == ["projection"]
+    recipe = mk.Recipe(weights=mk.int(4, group=16), head=mk.int(8, group=16))
+    converted = mk.quantize(Flat(), recipe, calib=None)
+    assert list(converted.quantized) == ["projection", "lm_head"]
+    assert converted.layer_reports[1].bpw == 9
