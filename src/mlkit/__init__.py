@@ -13,7 +13,17 @@ from mlkit.conversion import (
     rotate,
     smooth,
 )
-from mlkit.evaluation import PerplexityResult, Table, compare, eval, ppl, probe, sweep
+from mlkit.evaluation import (
+    Capabilities,
+    PerplexityResult,
+    Table,
+    capabilities,
+    compare,
+    eval,
+    ppl,
+    probe,
+    sweep,
+)
 from mlkit.inference import (
     BenchmarkResult,
     PackedLinear,
@@ -43,7 +53,7 @@ from mlkit.quantization.operations import (
     viterbi,
 )
 from mlkit.quantization.protocol import Quantizer, quantizer
-from mlkit.quantization.recipes import Recipe
+from mlkit.quantization.recipes import Recipe, preset
 from mlkit.quantization.representation import Q
 
 __version__ = "0.1.0"
@@ -53,6 +63,7 @@ __all__ = [
     "BenchmarkResult",
     "BlockPassCtx",
     "BlockPassReport",
+    "Capabilities",
     "Ctx",
     "DataSource",
     "Model",
@@ -72,6 +83,7 @@ __all__ = [
     "benchmark_model",
     "best_of",
     "block_pass",
+    "capabilities",
     "codec",
     "compare",
     "data",
@@ -98,6 +110,7 @@ __all__ = [
     "optimize",
     "pack",
     "ppl",
+    "preset",
     "probe",
     "proxy_loss",
     "quantize",
