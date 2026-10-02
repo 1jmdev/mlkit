@@ -1,8 +1,9 @@
 """Capture and replay of block inputs across calibration batches."""
 
+import contextlib
 import hashlib
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -64,7 +65,19 @@ def forward_batch(model: nn.Module, batch: Any) -> Any:
 
 
 class StopForward(Exception):
-    """Ends a model forward inside a hook once the required block inputs are captured."""
+    """Ends a model forward inside a hook once the required inputs have been observed."""
+
+
+@contextlib.contextmanager
+def evaluation_mode(module: nn.Module) -> Iterator[None]:
+    """Run ``module`` in evaluation mode and restore the training state of every submodule."""
+    training_states = [(submodule, submodule.training) for submodule in module.modules()]
+    module.eval()
+    try:
+        yield
+    finally:
+        for submodule, training in training_states:
+            submodule.training = training
 
 
 def equivalent_arguments(left: Any, right: Any) -> bool:
@@ -166,18 +179,20 @@ class CalibrationSession:
         self.prepare_data()
         assert self.batches is not None
         self.calls = [[] for _ in self.model.blocks]
-        module = self.model.module
-        training_states = [(submodule, submodule.training) for submodule in module.modules()]
-        module.eval()
-        try:
-            with torch.no_grad():
-                self._capture(self.batches[0], first_block_only=False)
-                first_block_only = self._later_blocks_repeat_first_block_arguments()
-                for batch in self.batches[1:]:
-                    self._capture(batch, first_block_only=first_block_only)
-        finally:
-            for submodule, training in training_states:
-                submodule.training = training
+        with evaluation_mode(self.model.module), torch.no_grad():
+            self._capture(self.batches[0], first_block_only=False)
+            first_block_only = self._later_blocks_repeat_first_block_arguments()
+            for batch in self.batches[1:]:
+                self._capture(batch, first_block_only=first_block_only)
+
+    def run_model(self) -> None:
+        """Run every calibration batch through the model; a hook may end a pass early."""
+        self.prepare_data()
+        assert self.batches is not None
+        with evaluation_mode(self.model.module), torch.no_grad():
+            for batch in self.batches:
+                with contextlib.suppress(StopForward):
+                    forward_batch(self.model.module, batch)
 
     def _later_blocks_repeat_first_block_arguments(self) -> bool:
         """Whether one batch showed every block receiving the first block's side inputs.

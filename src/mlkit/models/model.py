@@ -103,6 +103,12 @@ class Model(nn.Module):
 
 
 class QModel(Model):
+    """A converted model with the representation and report of every rounded layer.
+
+    ``tied_weights`` maps the name of a parameter that shares a rounded weight,
+    such as a tied input embedding, to the name of the layer that owns its codes.
+    """
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.quantized: dict[str, Q] = {}
@@ -111,6 +117,7 @@ class QModel(Model):
         self.activation_handles: list[Any] = []
         self.activation_specs: dict[str, dict[str, Any] | None] = {}
         self.kv_spec: dict[str, Any] | None = None
+        self.tied_weights: dict[str, str] = {}
         self.execution_backend = "dense"
 
     @property
@@ -129,6 +136,7 @@ class QModel(Model):
             return None
         if self._parameter_accounting is None:
             selected = {weight_name(record.name) for record in self.layer_reports}
+            selected.update(self.tied_weights)
             original_bits = 0
             original_elements = 0
             for name, parameter in self.module.named_parameters():

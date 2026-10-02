@@ -15,9 +15,19 @@ from mlkit.quantization.protocol import Quantizer
 
 @dataclass
 class Recipe:
+    """What to quantize and how.
+
+    ``weights`` selects the format of linear layers inside the repeated blocks.
+    ``head`` selects the format of linear layers outside them, such as the output
+    head of a language model; it is ``None`` by default, which leaves them dense.
+    Both accept a quantizer, a function of the layer context, or a mapping from
+    layer name patterns to either.
+    """
+
     weights: Any = None
     acts: Any = None
     kv: Any = None
+    head: Any = None
     transforms: Sequence[Callable] = field(default_factory=tuple)
     passes: Sequence[Callable] = field(default_factory=tuple)
     model_passes: Sequence[Callable] = field(default_factory=tuple)
@@ -35,6 +45,14 @@ class Recipe:
         if name.split(".")[-1] in {"lm_head", "embed_out", "output"}:
             return None
         return resolve_selector(self.weights, ctx)
+
+    def select_head(self, name: str, ctx: Ctx) -> Any:
+        if isinstance(self.head, Mapping):
+            for pattern, quantization in self.head.items():
+                if fnmatch.fnmatchcase(name, pattern):
+                    return resolve_selector(quantization, ctx)
+            return None
+        return resolve_selector(self.head, ctx)
 
 
 def resolve_selector(value: Any, context: Ctx) -> Any:

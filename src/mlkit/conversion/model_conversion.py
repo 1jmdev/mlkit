@@ -10,7 +10,7 @@ import torch
 from torch import nn
 
 from mlkit.calibration.session import CalibrationSession
-from mlkit.calibration.statistics import BlockStatistics
+from mlkit.calibration.statistics import BlockStatistics, ModelStatistics
 from mlkit.conversion.activation_quantization import (
     describe_quantizer,
     install_activation_quantization,
@@ -23,6 +23,7 @@ from mlkit.models.architecture import (
     normalize_affine_layers,
 )
 from mlkit.models.model import Model, QModel
+from mlkit.models.module_utilities import weight_name
 from mlkit.models.reports import LayerReport
 from mlkit.quantization.context import Ctx
 from mlkit.quantization.operations.losses import proxy_loss
@@ -101,29 +102,10 @@ def quantize(
             quantization = algorithms[name]
             if quantization is None:
                 continue
-            weight = layer.weight.detach().float()
-            synchronize(weight.device)
-            start = time.perf_counter()
-            with torch.no_grad():
-                result = as_q(quantization(weight, context))
-                reconstruction = result.w
-                if reconstruction.shape != weight.shape or not torch.isfinite(reconstruction).all():
-                    raise ValueError(f"quantizer returned an invalid reconstruction for {name}")
-                known_hessian = context._stats.get("H")
-                loss_context = Ctx(H=known_hessian) if known_hessian is not None else None
-                loss = float(proxy_loss(weight, reconstruction, loss_context))
-                layer.weight.copy_(reconstruction.to(layer.weight.dtype))
-            synchronize(weight.device)
-            duration = time.perf_counter() - start
-            bits = None if result.bits is None else result.bits + context._additional_bits
-            result.bits = bits
-            converted.quantized[name] = (
-                result if definition.passes else result.to("cpu", detach=True)
+            convert_layer(
+                converted, name, layer, quantization, context,
+                retain_device=bool(definition.passes),
             )
-            converted.layer_reports.append(LayerReport(
-                name, (weight.shape[0], weight.shape[1]), bits,
-                weight.numel(), loss, duration, repr(quantization),
-            ))
             if definition.acts is not None:
                 activation_quantizer = resolve_activation(definition.acts, name, context)
                 if activation_quantizer is not None:
@@ -142,7 +124,6 @@ def quantize(
                     ))
             if not definition.passes:
                 context._stats.clear()
-            del result, reconstruction, weight, known_hessian, loss_context
         if definition.passes:
             run_block_passes(converted, index, block, original_block, session, definition.passes)
             reports = {report.name: report for report in converted.layer_reports}
@@ -167,6 +148,8 @@ def quantize(
                 activation_context._provider = None
         del original_block, statistics, contexts
         session.release(index)
+    if definition.head is not None:
+        convert_head_layers(converted, definition, session, shared_cache, seed)
     for model_pass in definition.model_passes:
         model_pass(converted, session)
     if definition.kv is not None:
@@ -175,6 +158,76 @@ def quantize(
         ))
         converted.kv_spec = describe_quantizer(definition.kv)
     return converted
+
+
+def convert_layer(
+    converted: QModel,
+    name: str,
+    layer: nn.Linear,
+    quantization: Any,
+    context: Ctx,
+    *,
+    retain_device: bool,
+) -> None:
+    """Round one layer in place and record its representation and report."""
+    weight = layer.weight.detach().float()
+    synchronize(weight.device)
+    start = time.perf_counter()
+    with torch.no_grad():
+        result = as_q(quantization(weight, context))
+        reconstruction = result.w
+        if reconstruction.shape != weight.shape or not torch.isfinite(reconstruction).all():
+            raise ValueError(f"quantizer returned an invalid reconstruction for {name}")
+        known_hessian = context._stats.get("H")
+        loss_context = Ctx(H=known_hessian) if known_hessian is not None else None
+        loss = float(proxy_loss(weight, reconstruction, loss_context))
+        layer.weight.copy_(reconstruction.to(layer.weight.dtype))
+    synchronize(weight.device)
+    duration = time.perf_counter() - start
+    bits = None if result.bits is None else result.bits + context._additional_bits
+    result.bits = bits
+    converted.quantized[name] = result if retain_device else result.to("cpu", detach=True)
+    converted.layer_reports.append(LayerReport(
+        name, (weight.shape[0], weight.shape[1]), bits,
+        weight.numel(), loss, duration, repr(quantization),
+    ))
+
+
+def convert_head_layers(
+    converted: QModel,
+    definition: Recipe,
+    session: CalibrationSession,
+    shared_cache: dict[str, Any],
+    seed: int,
+) -> None:
+    """Round the linear layers outside the repeated blocks, after every block.
+
+    Their statistics come from complete forward passes of the calibration model.
+    A parameter that shares the storage of a rounded weight, such as a tied input
+    embedding, takes the rounded values and is recorded in ``tied_weights``.
+    """
+    block_path = converted.architecture.block_path
+    if block_path is None:
+        return
+    statistics = ModelStatistics(session)
+    for name, layer in list(converted.module.named_modules()):
+        if not isinstance(layer, nn.Linear) or name.startswith(f"{block_path}."):
+            continue
+        context = Ctx(
+            name, layer, None, len(converted.blocks),
+            provider=statistics.provider(name, layer.weight.device),
+            cache=shared_cache, seed=seed, device=layer.weight.device,
+        )
+        quantization = definition.select_head(name, context)
+        if quantization is None:
+            continue
+        convert_layer(converted, name, layer, quantization, context, retain_device=False)
+        context._stats.clear()
+        for parameter_name, parameter in converted.module.named_parameters(
+            remove_duplicate=False
+        ):
+            if parameter is layer.weight and parameter_name != weight_name(name):
+                converted.tied_weights[parameter_name] = name
 
 
 def resolve_activation(value: Any, name: str, context: Ctx) -> Any:

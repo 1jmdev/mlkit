@@ -12,7 +12,7 @@ from collections.abc import Callable
 import torch
 from torch import Tensor, nn
 
-from mlkit.calibration.session import CalibrationSession
+from mlkit.calibration.session import CalibrationSession, StopForward
 from mlkit.models.architecture import identify_siblings
 
 SECOND_MOMENT_BLOCK = 512
@@ -237,6 +237,43 @@ class BlockStatistics:
         def retrieve(statistic: str, function: Callable | None, reduction: str) -> Tensor:
             if (name, statistic) not in self.values:
                 self.collect(statistic, function, reduction)
+            return self.values[name, statistic].to(device)
+
+        return retrieve
+
+
+class ModelStatistics:
+    """Statistics of layers outside the repeated blocks, from complete forward passes.
+
+    A pass ends at the observed layer, so a wide output head is never evaluated.
+    """
+
+    def __init__(self, session: CalibrationSession) -> None:
+        self.session = session
+        self.values: dict[tuple[str, str], Tensor] = {}
+
+    def collect(self, name: str, statistic: str, function: Callable | None, reduction: str) -> None:
+        session = self.session
+        accumulator = StatisticAccumulator(statistic, function, reduction, session.sample_rows)
+
+        def observe(layer: nn.Module, arguments: tuple) -> None:
+            half_precision = arguments[0].dtype in HALF_PRECISION_DTYPES
+            inputs = arguments[0].detach().reshape(-1, arguments[0].shape[-1]).float()
+            inputs = limit_token_energy(inputs, session.token_energy_limit)
+            accumulator.update(inputs, half_precision=half_precision)
+            raise StopForward
+
+        handle = session.model.module.get_submodule(name).register_forward_pre_hook(observe)
+        try:
+            session.run_model()
+        finally:
+            handle.remove()
+        self.values[name, statistic] = accumulator.result()
+
+    def provider(self, name: str, device: torch.device) -> Callable:
+        def retrieve(statistic: str, function: Callable | None, reduction: str) -> Tensor:
+            if (name, statistic) not in self.values:
+                self.collect(name, statistic, function, reduction)
             return self.values[name, statistic].to(device)
 
         return retrieve
