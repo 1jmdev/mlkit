@@ -1,9 +1,13 @@
-"""Compare compiled cached logits with eager logits on identical token prefixes."""
+"""Compare compiled cached logits with eager logits on identical token prefixes.
+
+    uv run python -m benchmarks.models.generation_accuracy --model meta-llama/Llama-3.2-1B
+"""
 
 import argparse
 import gc
 import json
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.nn.functional as functional
@@ -17,8 +21,23 @@ def release_model() -> None:
     torch.cuda.empty_cache()
 
 
+def recipes() -> dict[str, Any]:
+    """The recipe of every measured backend; ``None`` keeps the FP16 weights."""
+    int4 = mk.int(4, group=128)
+    return {
+        "dense": None,
+        "packed": int4,
+        "packed-head": mk.Recipe(weights=int4, head=mk.int(8, group=128)),
+    }
+
+
+def load(name: str, recipe: Any) -> mk.Model:
+    model = mk.load(name, dtype="float16")
+    return model if recipe is None else mk.quantize(model, recipe, calib=None)
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     parser.add_argument("--model", default="meta-llama/Llama-3.2-1B")
     parser.add_argument("--tokens", type=int, default=32)
     parser.add_argument(
@@ -26,19 +45,16 @@ def main() -> None:
     )
     arguments = parser.parse_args()
     records = []
-    for backend in ("dense", "packed"):
-        model = mk.load(arguments.model, dtype="float16")
-        if backend == "packed":
-            quantized = mk.quantize(model, mk.int(4, group=128), calib=None)
-            del model
-            model = quantized
-            del quantized
+    for backend, recipe in recipes().items():
+        model = load(arguments.model, recipe)
         inputs = model.tokenizer(
             "Explain the difference between calibration and inference in weight quantization.",
             return_tensors="pt",
         )
         prompt_length = inputs["input_ids"].shape[1]
-        compiled = mk.optimize(model, backend=backend, compile=True, inplace=True)
+        compiled = mk.optimize(
+            model, backend="dense" if recipe is None else "packed", compile=True, inplace=True
+        )
         with torch.inference_mode():
             result = compiled.generate(
                 **inputs,
@@ -54,12 +70,7 @@ def main() -> None:
         del result, compiled, model
         release_model()
 
-        reference = mk.load(arguments.model, dtype="float16")
-        if backend == "packed":
-            quantized = mk.quantize(reference, mk.int(4, group=128), calib=None)
-            del reference
-            reference = quantized
-            del quantized
+        reference = load(arguments.model, recipe)
         with torch.inference_mode():
             output = reference(generated, use_cache=False)
             eager_logits = output.logits[0, prompt_length - 1 : -1].cpu().float()

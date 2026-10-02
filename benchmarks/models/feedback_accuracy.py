@@ -18,8 +18,8 @@ def main() -> None:
     parser.add_argument("--model", default="meta-llama/Llama-3.2-1B")
     parser.add_argument("--block", type=int, default=0)
     parser.add_argument("--layers", default="*")
-    parser.add_argument("--sequence", type=int, default=2048)
-    parser.add_argument("--calibration-batches", type=int, default=128)
+    parser.add_argument("--sequence", type=int, default=1024)
+    parser.add_argument("--calibration-batches", type=int, default=16)
     parser.add_argument(
         "--output", type=Path, default=Path("benchmark_results/feedback_accuracy.json")
     )
