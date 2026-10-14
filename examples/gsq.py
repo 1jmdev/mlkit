@@ -69,7 +69,7 @@ class PrefixCalls:
 
 
 class GSQLinear(nn.Module):
-    def __init__(self, original, quantized, bits, gradient_checkpointing):
+    def __init__(self, original, quantized, bits, gradient_checkpointing, logits_dtype):
         super().__init__()
         self.bias = original.bias
         self.dtype = original.weight.dtype
@@ -77,21 +77,27 @@ class GSQLinear(nn.Module):
         self.gradient_checkpointing = gradient_checkpointing
         self.quantized = quantized
         self.register_buffer("initial_codes", quantized.codes)
-        self.register_buffer("grid", quantized.params["values"].to(self.dtype))
+        self.register_buffer("grid", quantized.params["values"].to(logits_dtype))
         self.scales = nn.Parameter(quantized.params["scales"].float().clone())
         if bits == 2:
             self.register_buffer("candidates", self.grid[:, None, None])
+            self.register_buffer(
+                "valid_candidates", torch.ones(4, 1, 1, dtype=torch.bool, device="cuda")
+            )
             prior = -0.5 * (self.candidates - self.grid[self.initial_codes.long()]).square()
         else:
             shifts = torch.arange(-2, 3, device="cuda")[:, None, None]
+            indices = self.initial_codes.long()[None] + shifts
+            self.register_buffer("valid_candidates", (indices >= 0) & (indices < len(self.grid)))
             self.register_buffer(
                 "candidates",
-                self.grid[(self.initial_codes.long()[None] + shifts).clamp(0, len(self.grid) - 1)],
+                self.grid[indices.clamp(0, len(self.grid) - 1)],
             )
-            prior = -0.5 * torch.arange(-2, 3, device="cuda", dtype=self.dtype).square()
+            prior = -0.5 * torch.arange(-2, 3, device="cuda", dtype=logits_dtype).square()
             prior = prior[:, None, None].expand(5, *self.initial_codes.shape)
+        mean = (prior * self.valid_candidates).sum(0) / self.valid_candidates.sum(0)
         self.logits = nn.Parameter(
-            0.01 * (torch.randn_like(prior) + 6 * (prior - prior.mean(0)))
+            0.01 * (torch.randn_like(prior) + 6 * (prior - mean))
         )
         self.temperature = 2.0
         self.sharpness = 100.0
@@ -100,12 +106,14 @@ class GSQLinear(nn.Module):
         uniform = torch.rand_like(logits)
         noise = -torch.log(-torch.log(uniform + 1e-8) + 1e-8)
         probabilities = functional.softmax(
-            (logits * self.sharpness + noise) / self.temperature, dim=0
+            (logits.masked_fill(~self.valid_candidates, -torch.inf) * self.sharpness + noise)
+            / self.temperature,
+            dim=0,
         )
         values = (probabilities * self.candidates).sum(0)
         return (
-            values.reshape(*scales.shape, 128) * scales.to(self.dtype)[..., None]
-        ).flatten(1)
+            values.reshape(*scales.shape, 128) * scales.to(values.dtype)[..., None]
+        ).flatten(1).to(self.dtype)
 
     def forward(self, inputs):
         weight = (
@@ -119,7 +127,7 @@ class GSQLinear(nn.Module):
 
     @torch.no_grad()
     def finalize(self):
-        codes = self.logits.argmax(0)
+        codes = self.logits.masked_fill(~self.valid_candidates, -torch.inf).argmax(0)
         if self.bits > 2:
             codes = (self.initial_codes.long() + codes - 2).clamp(0, len(self.grid) - 1)
         return mk.Q(
@@ -153,14 +161,36 @@ def stage_output(block, call, stage):
     return extract_hidden(call.run(block))
 
 
+@torch.no_grad()
+def hard_stage_loss(block, calls, targets, stage):
+    return float(torch.stack([
+        functional.mse_loss(stage_output(block, call, stage).float(), target.float())
+        * call.hidden().shape[0]
+        for call, target in zip(calls, targets)
+    ]).sum() / sum(call.hidden().shape[0] for call in calls))
+
+
 def train_stage(model, block, teacher, calls, names, stage, arguments):
     start = time.perf_counter()
     prefix = model.architecture.block_name(block.self_attn.layer_idx)
     originals = {name: block.get_submodule(name) for name in names}
+    with torch.no_grad():
+        validation_calls = [
+            calls.batch(indices.tolist())
+            for indices in torch.arange(
+                arguments.sequences,
+                arguments.sequences + min(64, arguments.gptq_sequences),
+            ).split(arguments.microbatch_size)
+        ]
+        validation_targets = [stage_output(teacher, call, stage) for call in validation_calls]
+    best_loss = hard_stage_loss(block, validation_calls, validation_targets, stage)
+    initial_loss = best_loss
+    best_epoch = 0
+    best = {name: model.quantized[f"{prefix}.{name}"] for name in names}
     quantizers = {
         name: GSQLinear(
             original, model.quantized[f"{prefix}.{name}"].to("cuda"),
-            arguments.bits, arguments.gradient_checkpointing,
+            arguments.bits, arguments.gradient_checkpointing, getattr(torch, arguments.logits_dtype),
         )
         for name, original in originals.items()
     }
@@ -211,16 +241,34 @@ def train_stage(model, block, teacher, calls, names, stage, arguments):
                     f"epoch {epoch + 1:>2}/{arguments.epochs}  step {step:>4}/{steps}",
                     end="", flush=True,
                 )
+        with torch.no_grad():
+            candidates = {name: quantizer.finalize() for name, quantizer in quantizers.items()}
+            for name, candidate in candidates.items():
+                originals[name].weight.copy_(candidate.w.to(originals[name].weight.dtype))
+                block.set_submodule(name, originals[name])
+            hard_loss = hard_stage_loss(block, validation_calls, validation_targets, stage)
+            if hard_loss < best_loss:
+                best, best_loss, best_epoch = candidates, hard_loss, epoch + 1
+            for name, quantizer in quantizers.items():
+                block.set_submodule(name, quantizer)
         print(
             f"\rBlock {block.self_attn.layer_idx:>2}  {stage:<9}  "
             f"epoch {epoch + 1:>2}/{arguments.epochs}  "
-            f"MSE {float(total_loss / math.ceil(arguments.sequences / 64)):.7g}",
+            f"soft MSE {float(total_loss / math.ceil(arguments.sequences / 64)):.7g}  "
+            f"best hard MSE {best_loss:.7g}",
             end="", flush=True,
         )
-    print(flush=True)
+    print(
+        f"  |  selected {'GPTQ' if best_epoch == 0 else f'epoch {best_epoch}'}",
+        flush=True,
+    )
+    model.gsq_reports[f"{prefix}.{stage}"] = {
+        "gptq_mse": initial_loss,
+        "selected_mse": best_loss,
+        "selected_epoch": best_epoch,
+    }
     with torch.no_grad():
-        for name, quantizer in quantizers.items():
-            quantized = quantizer.finalize()
+        for name, quantized in best.items():
             original = originals[name]
             original.weight.copy_(quantized.w.to(original.weight.dtype))
             block.set_submodule(name, original)
@@ -307,8 +355,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--preset", choices=("paper", "h100-fast"), default="paper")
     parser.add_argument("--model", default="meta-llama/Llama-3.2-1B")
-    parser.add_argument("--bits", type=int, choices=(2, 3), default=2)
-    parser.add_argument("--output", type=Path, default=Path("artifacts/llama_gsq"))
+    parser.add_argument("--bits", type=int, choices=(2, 3))
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--logits-dtype", choices=("bfloat16", "float32"))
     parser.add_argument("--activation-cache-mib", type=int)
     parser.add_argument("--shuffle-buffer-size", type=int)
     parser.add_argument("--sequences", type=int)
@@ -332,6 +381,7 @@ def main():
     arguments = parser.parse_args()
     settings = {
         "paper": {
+            "bits": 2, "logits_dtype": "bfloat16",
             "activation_cache_mib": 512, "shuffle_buffer_size": 1024,
             "sequences": 4096, "sequence_length": 4096, "gptq_sequences": 512,
             "epochs": 20, "microbatch_size": 2, "scale_microbatch_size": 2,
@@ -341,19 +391,23 @@ def main():
             "tasks": "arc_easy,arc_challenge,hellaswag,winogrande,piqa",
         },
         "h100-fast": {
+            "bits": 3, "logits_dtype": "float32",
             "activation_cache_mib": 8192, "shuffle_buffer_size": 1024,
-            "sequences": 256, "sequence_length": 1024, "gptq_sequences": 64,
-            "epochs": 4, "microbatch_size": 32, "scale_microbatch_size": 8,
+            "sequences": 512, "sequence_length": 1024, "gptq_sequences": 256,
+            "epochs": 12, "microbatch_size": 32, "scale_microbatch_size": 8,
             "distillation_chunk": 1024, "cache_targets": True,
             "gradient_checkpointing": False, "teacher_device": "cuda", "cpu_threads": 8,
-            "evaluation_budget": "fast", "tasks": "",
+            "evaluation_budget": "full", "tasks": "",
         },
     }
     for name, value in settings[arguments.preset].items():
         if getattr(arguments, name) is None:
             setattr(arguments, name, value)
+    if arguments.output is None:
+        arguments.output = Path(f"artifacts/llama_gsq_{arguments.bits}bit")
     print(
-        f"Preset {arguments.preset}  |  {arguments.sequences} sequences x "
+        f"Preset {arguments.preset}  |  GSQ-{arguments.bits}  |  "
+        f"{arguments.sequences} sequences x "
         f"{arguments.sequence_length} tokens x {arguments.epochs} epochs  |  "
         f"microbatch {arguments.microbatch_size}, effective batch 64",
         flush=True,
@@ -365,6 +419,7 @@ def main():
     source.module.requires_grad_(False)
     teacher = copy.deepcopy(source.module).to(arguments.teacher_device).eval()
     model = mk.QModel(source.module, source.tokenizer, name=source.name)
+    model.gsq_reports = {}
     corpus = load_dataset(
         "HuggingFaceFW/fineweb-edu", "sample-10BT", split="train", streaming=True
     ).shuffle(seed=arguments.seed, buffer_size=arguments.shuffle_buffer_size)
@@ -419,7 +474,7 @@ def main():
         print("All block inputs fit in VRAM; prefixes will be propagated once per block.", flush=True)
     initialization = mk.gptq(
         mk.int(
-            arguments.bits, group=128, scale_fmt="fp32",
+            arguments.bits, group=128, scale_fmt="fp16",
             scale=lambda values: values.abs().amax(-1).clamp_min(1e-12)
             * 2 / (2**arguments.bits - 1),
         ),
@@ -511,6 +566,11 @@ def main():
             prediction = model(**batch, use_cache=False).logits[:, :-1].argmax(-1)
             unchanged += int((reference == prediction).sum())
             tested += reference.numel()
+    print("Evaluating original-model WikiText-2 perplexity.", flush=True)
+    baseline_ppl = mk.ppl(
+        teacher_model, data="wikitext2", budget=arguments.evaluation_budget,
+        seq=arguments.sequence_length,
+    )
     del teacher_model, teacher, source
     torch.cuda.empty_cache()
     metrics = {
@@ -523,6 +583,8 @@ def main():
         "scale_distillation": (
             "Teacher-to-student KL; temperature and optimizer lr are implementation choices."
         ),
+        "stage_selection": "Best hard-validation MSE among GPTQ initialization and GSQ epochs",
+        "stages": model.gsq_reports,
         "stability_stage": "Before end-to-end scale tuning",
         "activation_strategy": "Full CUDA cache when it fits; bounded prefix cache otherwise",
         "quantization_seconds": quantization_seconds,
@@ -530,11 +592,13 @@ def main():
         "next_token_dbs": unchanged / tested,
         "tested_next_token_decisions": tested,
         "quantized_bpw": model.bpw,
+        "baseline_wikitext2_ppl": baseline_ppl,
         "wikitext2_ppl": mk.ppl(
             model, data="wikitext2", budget=arguments.evaluation_budget,
             seq=arguments.sequence_length,
         ),
     }
+    metrics["perplexity_ratio"] = metrics["wikitext2_ppl"] / baseline_ppl
     if arguments.tasks:
         metrics["tasks"] = mk.eval(
             model, arguments.tasks.split(","), batch_size=1,
@@ -544,7 +608,9 @@ def main():
     (arguments.output / "evaluation.json").write_text(json.dumps(metrics, indent=2) + "\n")
     print(
         f"\n{'Next-token DBS':<26} {metrics['next_token_dbs']:.2%}\n"
+        f"{'Original perplexity':<26} {metrics['baseline_wikitext2_ppl']:.4f}\n"
         f"{'WikiText-2 perplexity':<26} {metrics['wikitext2_ppl']:.4f}\n"
+        f"{'Perplexity ratio':<26} {metrics['perplexity_ratio']:.4f}x\n"
         f"{'Quantized bits/weight':<26} {metrics['quantized_bpw']:.4f}\n"
         f"{'Quantization time':<26} {metrics['quantization_seconds']:.1f}s\n"
         f"{'Total time':<26} {metrics['total_seconds']:.1f}s\n"
