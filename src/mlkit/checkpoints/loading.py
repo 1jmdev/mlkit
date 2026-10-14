@@ -85,6 +85,7 @@ def load_checkpoint(
     converted = QModel(module, tokenizer, name=manifest["name"])
     converted.quantized = quantized_layers
     converted.tied_weights = dict(tied_weights)
+    converted.stability_reports = manifest.get("stability_reports", {})
     for name, specification in manifest.get("activations", {}).items():
         target = module.get_submodule(name)
         quantizer = restore_quantizer(specification)

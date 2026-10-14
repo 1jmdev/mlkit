@@ -2,11 +2,12 @@
 
 import copy
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as functional
 from torch import nn
 
 from mlkit.calibration.session import CalibrationSession
@@ -47,6 +48,9 @@ def quantize(
     cache_dir: str | Path | None = "~/.cache/mlkit/statistics",
     calibration_storage: str = "auto",
     token_energy_limit: float | None = 100.0,
+    stability: bool = False,
+    stability_top_k: int = 8,
+    progress: bool = False,
 ) -> QModel:
     """Convert a separate model copy; statistics and datasets remain lazy.
 
@@ -56,6 +60,8 @@ def quantize(
     calibration token relative to the median token of its batch, so that a few
     massive activations cannot dominate the statistics; ``None`` disables it.
     """
+    from mlkit.evaluation.decision_stability import conversion_monitor
+
     source = model if isinstance(model, Model) else Model(model)
     definition: Recipe = normalize_recipe(recipe)
     converted_module = copy.deepcopy(source.module).eval()
@@ -76,6 +82,10 @@ def quantize(
     if definition.passes or (definition.transforms and not sequential):
         session.prepare()
     shared_cache: dict[str, Any] = {}
+    monitor = (
+        conversion_monitor(converted, stability=stability, top_k=stability_top_k, progress=progress)
+        if stability or progress else None
+    )
     for index, block in enumerate(converted.blocks):
         prefix = converted.architecture.block_name(index)
         original_block = copy.deepcopy(block)
@@ -109,6 +119,8 @@ def quantize(
             convert_layer(
                 converted, name, layer, quantization, context,
                 retain_device=bool(definition.passes),
+                monitor=monitor,
+                stability_top_k=stability_top_k if stability else None,
             )
             if definition.acts is not None:
                 activation_quantizer = resolve_activation(definition.acts, name, context)
@@ -153,7 +165,10 @@ def quantize(
         del original_block, statistics, contexts
         session.release(index)
     if definition.head is not None:
-        convert_head_layers(converted, definition, session, shared_cache, seed)
+        convert_head_layers(
+            converted, definition, session, shared_cache, seed,
+            monitor=monitor, stability_top_k=stability_top_k if stability else None,
+        )
     for model_pass in definition.model_passes:
         model_pass(converted, session)
     if definition.kv is not None:
@@ -172,6 +187,8 @@ def convert_layer(
     context: Ctx,
     *,
     retain_device: bool,
+    monitor: Callable | None = None,
+    stability_top_k: int | None = None,
 ) -> None:
     """Round one layer in place and record its representation and report.
 
@@ -189,6 +206,9 @@ def convert_layer(
     parts = []
     loss = 0.0
     with torch.no_grad():
+        if stability_top_k is not None:
+            inputs = context.X.to(layer.weight.dtype)
+            original_output = functional.linear(inputs, layer.weight, layer.bias)
         for first_row in range(0, rows, rows_per_chunk):
             last_row = min(rows, first_row + rows_per_chunk)
             weight = layer.weight[first_row:last_row].detach().float()
@@ -204,6 +224,16 @@ def convert_layer(
             parts.append(part if retain_device else part.to("cpu", detach=True))
             del part, reconstruction, weight
     result = parts[0] if len(parts) == 1 else concatenate_rows(parts)
+    measurement: dict[str, Any] = {}
+    if stability_top_k is not None:
+        from mlkit.evaluation.decision_stability import decision_stability
+
+        with torch.no_grad():
+            measurement = decision_stability(
+                original_output,
+                functional.linear(inputs, layer.weight, layer.bias),
+                stability_top_k,
+            )
     synchronize(layer.weight.device)
     duration = time.perf_counter() - start
     bits = None if result.bits is None else result.bits + context._additional_bits
@@ -212,6 +242,8 @@ def convert_layer(
     converted.layer_reports.append(LayerReport(
         name, (rows, width), bits, rows * width, loss, duration, repr(quantization),
     ))
+    if monitor is not None:
+        monitor(context, measurement, duration)
 
 
 def convert_head_layers(
@@ -220,6 +252,9 @@ def convert_head_layers(
     session: CalibrationSession,
     shared_cache: dict[str, Any],
     seed: int,
+    *,
+    monitor: Callable | None = None,
+    stability_top_k: int | None = None,
 ) -> None:
     """Round the linear layers outside the repeated blocks, after every block.
 
@@ -242,7 +277,10 @@ def convert_head_layers(
         quantization = definition.select_head(name, context)
         if quantization is None:
             continue
-        convert_layer(converted, name, layer, quantization, context, retain_device=False)
+        convert_layer(
+            converted, name, layer, quantization, context, retain_device=False,
+            monitor=monitor, stability_top_k=stability_top_k,
+        )
         context._stats.clear()
         for parameter_name, parameter in converted.module.named_parameters(
             remove_duplicate=False

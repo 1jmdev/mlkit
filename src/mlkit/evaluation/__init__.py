@@ -2,6 +2,7 @@
 
 from mlkit.evaluation.capability_report import Capabilities, capabilities
 from mlkit.evaluation.comparison import baseline_bpw, compare, sweep
+from mlkit.evaluation.decision_stability import decision_stability
 from mlkit.evaluation.layer_probe import probe
 from mlkit.evaluation.perplexity import PerplexityResult, ppl
 from mlkit.evaluation.tables import Table, format_value
@@ -14,6 +15,7 @@ __all__ = [
     "baseline_bpw",
     "capabilities",
     "compare",
+    "decision_stability",
     "eval",
     "format_value",
     "ppl",

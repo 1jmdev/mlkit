@@ -129,6 +129,7 @@ def save(model: QModel, path: str | Path, *, overwrite: bool = False) -> None:
             "dtype": str(model.dtype).removeprefix("torch."),
             "layers": layers, "reports": [asdict(record) for record in model.layer_reports],
             "pass_reports": [asdict(record) for record in model.pass_reports],
+            "stability_reports": model.stability_reports,
             "logical_bpw": model.bpw, "model_bpw": model.model_bpw,
             "parameter_accounting": model._parameter_accounting,
             "transforms": getattr(model.module, "_mlkit_transforms", []),

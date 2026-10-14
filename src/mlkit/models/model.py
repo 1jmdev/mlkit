@@ -113,6 +113,7 @@ class QModel(Model):
         super().__init__(*args, **kwargs)
         self.quantized: dict[str, Q] = {}
         self.layer_reports: list[LayerReport] = []
+        self.stability_reports: dict[str, dict[str, Any]] = {}
         self.pass_reports: list[BlockPassReport] = []
         self.activation_handles: list[Any] = []
         self.activation_specs: dict[str, dict[str, Any] | None] = {}

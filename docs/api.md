@@ -5,6 +5,25 @@ operations in custom formats should allocate tensors on the input tensor's devic
 Model conversion preserves the source weights; `optimize(inplace=True)` explicitly
 permits replacing layers in the supplied model.
 
+Enable live conversion metrics with `stability=True, progress=True`:
+
+```python
+converted = mk.quantize(
+    model, recipe, calib=calibration,
+    stability=True, progress=True, sample_rows=256, stability_top_k=8,
+)
+print(converted.stability_reports)
+```
+
+Each projection is measured on the same cached inputs before and after its weights
+are converted, using the model's inference dtype. Reports include local channel
+DBS, sign flips, top-K overlap, direction drift, ordering flips and margin-weighted
+decision risk. They are preserved in checkpoints. Local DBS is a channel-ranking
+proxy, not final-token agreement; it does not include downstream error propagation.
+`sample_rows` controls the number of cached input rows. `progress=True` also works
+without stability measurements. `mk.decision_stability(original, reconstructed,
+top_k=8)` computes the same metrics directly from output tensors.
+
 ## Quantizer protocol
 
 A quantizer receives an FP32 matrix `[out, in]` and a `Ctx`. It returns a
