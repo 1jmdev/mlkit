@@ -15,6 +15,8 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 
 import mlkit as mk
+from mlkit.quantization.codecs.grouped_trellis import decode_grouped_trellis
+from mlkit.quantization.operations.trellis_search import one_mad, viterbi
 from mlkit.calibration.session import CalibrationSession
 from mlkit.calibration.statistics import BlockStatistics
 from mlkit.conversion.block_passes import CodecLinear
@@ -350,12 +352,102 @@ def tune_scales(model, teacher, batches, arguments):
     teacher.to(arguments.teacher_device)
 
 
+@torch.no_grad()
+def encode_trellis(model, block, teacher, contexts, arguments):
+    started = time.perf_counter()
+    prefix = model.architecture.block_name(block.self_attn.layer_idx)
+    candidates = {}
+    losses = {}
+    for name, context in contexts.items():
+        quantized = model.quantized[f"{prefix}.{name}"].to("cuda")
+        grid = quantized.params["values"].float()
+        ordering = one_mad(torch.arange(2**arguments.trellis_state_bits, device="cuda"))
+        ordering = ordering.reshape(-1, len(grid)).argsort(-1).argsort(-1)
+        codebook = grid[ordering.flatten()]
+        values = grid[quantized.codes.long()]
+        rows, width = values.shape
+        sequences = values.reshape(rows // 16, 16, width // 16, 16).permute(2, 0, 1, 3)
+        sequences = sequences.reshape(-1, 256).contiguous()
+        reference = teacher.get_submodule(name).weight
+        energy = (reference.float() @ context.H * reference.float()).sum() / rows
+        candidates[name] = {}
+        losses[name] = {}
+        for bits in (2, 3, 4):
+            states = torch.cat([
+                viterbi(
+                    part, codebook, arguments.trellis_state_bits, bits,
+                    backend="triton", return_states=True,
+                )
+                for part in sequences.split(arguments.trellis_chunk)
+            ])
+            candidate = mk.Q(
+                codes=(states[:, 1:] & (2**bits - 1)).to(torch.uint8),
+                params={
+                    "initial_states": states[:, 0], "scale": torch.ones((), device="cuda"),
+                    "L": arguments.trellis_state_bits, "k": bits, "shape": (rows, width),
+                    "tile": 16, "codebook": codebook, "scales": quantized.params["scales"],
+                    "group": 128,
+                },
+                decode=decode_grouped_trellis, codec="grouped_trellis",
+                bits=(
+                    bits * (states.numel() - len(states))
+                    + arguments.trellis_state_bits * len(states)
+                    + 16 * (quantized.params["scales"].numel() + codebook.numel() + 1)
+                ),
+                metadata={
+                    "code_bits": bits, "trainable": ["scales"],
+                    "parameter_bits": {"initial_states": arguments.trellis_state_bits},
+                    "parameter_formats": {"scales": "fp16", "codebook": "fp16", "scale": "fp16"},
+                },
+            )
+            candidates[name][bits] = candidate
+            losses[name][bits] = float(mk.proxy_loss(reference, candidate.w, context) / energy)
+    allocation = {
+        name: 4 if block.self_attn.layer_idx == 1 and name == "mlp.down_proj" else 2
+        for name in contexts
+    }
+    occupied = sum(candidates[name][bits].bits for name, bits in allocation.items())
+    budget = arguments.trellis_budget * sum(block.get_submodule(name).weight.numel() for name in contexts)
+    while True:
+        upgrades = [
+            ((losses[name][current] - losses[name][bits]) / cost, name, bits, cost)
+            for name, current in allocation.items()
+            for bits in range(current + 1, 5)
+            if (cost := candidates[name][bits].bits - candidates[name][current].bits)
+            and losses[name][bits] < losses[name][current] and occupied + cost <= budget
+        ]
+        if not upgrades:
+            break
+        _, name, bits, cost = max(upgrades)
+        allocation[name] = bits
+        occupied += cost
+    for name, bits in allocation.items():
+        candidate = candidates[name][bits]
+        block.get_submodule(name).weight.copy_(candidate.w.to(model.dtype))
+        model.quantized[f"{prefix}.{name}"] = candidate
+        model.gsq_reports[f"{prefix}.{name}.trellis"] = {
+            "transition_bits": bits,
+            "storage_bpw": candidate.bits / block.get_submodule(name).weight.numel(),
+            "relative_output_error": losses[name][bits],
+        }
+        print(
+            f"Trellis  {block.self_attn.layer_idx:>2}  {name.rsplit('.', 1)[-1]:>12}  "
+            f"{bits} transition bits  |  {candidate.bits / block.get_submodule(name).weight.numel():.4f} bpw  "
+            f"|  relative output error {losses[name][bits]:.6e}", flush=True,
+        )
+    return (time.perf_counter() - started) / len(contexts)
+
+
 def main():
     started = time.perf_counter()
     parser = argparse.ArgumentParser()
     parser.add_argument("--preset", choices=("paper", "h100-fast"), default="paper")
     parser.add_argument("--model", default="meta-llama/Llama-3.2-1B")
-    parser.add_argument("--bits", type=int, choices=(2, 3))
+    parser.add_argument("--bits", type=int, choices=(2, 3, 4))
+    parser.add_argument("--trellis", action="store_true")
+    parser.add_argument("--trellis-budget", type=float, default=3.2)
+    parser.add_argument("--trellis-state-bits", type=int, choices=(8, 10, 12), default=8)
+    parser.add_argument("--trellis-chunk", type=int, default=512)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--logits-dtype", choices=("bfloat16", "float32"))
     parser.add_argument("--activation-cache-mib", type=int)
@@ -403,8 +495,13 @@ def main():
     for name, value in settings[arguments.preset].items():
         if getattr(arguments, name) is None:
             setattr(arguments, name, value)
+    if arguments.trellis:
+        arguments.bits = 4
     if arguments.output is None:
-        arguments.output = Path(f"artifacts/llama_gsq_{arguments.bits}bit")
+        arguments.output = Path(
+            "artifacts/llama_gsq_mixed_trellis"
+            if arguments.trellis else f"artifacts/llama_gsq_{arguments.bits}bit"
+        )
     print(
         f"Preset {arguments.preset}  |  GSQ-{arguments.bits}  |  "
         f"{arguments.sequences} sequences x "
@@ -528,6 +625,9 @@ def main():
         for stage, names in stages:
             duration = train_stage(model, block, original, calls, names, stage, arguments)
             durations.update(dict.fromkeys(names, duration))
+        if arguments.trellis:
+            duration = encode_trellis(model, block, original, contexts, arguments)
+            durations = {name: seconds + duration for name, seconds in durations.items()}
         monitor = conversion_monitor(model, stability=True, top_k=8, progress=True)
         with torch.no_grad():
             for name, context in contexts.items():
@@ -542,7 +642,7 @@ def main():
                     reports[context.name], bits=model.quantized[context.name].bits,
                     loss=float(mk.proxy_loss(reference.weight, projection.weight, context)),
                     seconds=reports[context.name].seconds + durations[name],
-                    method=f"GSQ-{arguments.bits}",
+                    method=f"GSQ-{arguments.bits}" + (" + mixed trellis" if arguments.trellis else ""),
                 ))
                 monitor(context, measurement, model.layer_reports[-1].seconds)
             if hidden is not None and index + 1 < len(model.blocks):
