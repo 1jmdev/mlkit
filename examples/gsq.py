@@ -24,13 +24,15 @@ from mlkit.models.module_utilities import extract_hidden
 
 
 class PrefixCalls:
-    def __init__(self, model, templates, index, batches, cache_mib):
+    def __init__(self, model, templates, index, batches, cache_mib, batch_size, hidden=None):
         self.model = model
         self.blocks = model.blocks[:index]
         self.templates = templates
         self.index = index
         self.batches = batches
         self.cache = {}
+        self.batch_size = batch_size
+        self.hidden = hidden
         self.capacity = (cache_mib * 2**20) // (
             batches[0]["input_ids"].numel() * model.config.hidden_size * 2
         )
@@ -40,11 +42,17 @@ class PrefixCalls:
 
     def __getitem__(self, index):
         if isinstance(index, slice):
-            return (self.batch([position]) for position in range(*index.indices(len(self))))
+            positions = range(*index.indices(len(self)))
+            return (
+                self.batch(list(positions[offset : offset + self.batch_size]))
+                for offset in range(0, len(positions), self.batch_size)
+            )
         return self.batch([index])
 
     @torch.no_grad()
     def batch(self, indices):
+        if self.hidden is not None:
+            return self.templates[self.index].with_hidden(self.hidden[indices])
         if all(index in self.cache for index in indices):
             hidden = torch.cat([self.cache[index] for index in indices])
         else:
@@ -61,11 +69,12 @@ class PrefixCalls:
 
 
 class GSQLinear(nn.Module):
-    def __init__(self, original, quantized, bits):
+    def __init__(self, original, quantized, bits, gradient_checkpointing):
         super().__init__()
         self.bias = original.bias
         self.dtype = original.weight.dtype
         self.bits = bits
+        self.gradient_checkpointing = gradient_checkpointing
         self.quantized = quantized
         self.register_buffer("initial_codes", quantized.codes)
         self.register_buffer("grid", quantized.params["values"].to(self.dtype))
@@ -99,9 +108,12 @@ class GSQLinear(nn.Module):
         ).flatten(1)
 
     def forward(self, inputs):
-        weight = checkpoint(
-            self.soft_weight, self.logits, self.scales, use_reentrant=False,
-            preserve_rng_state=True,
+        weight = (
+            checkpoint(
+                self.soft_weight, self.logits, self.scales, use_reentrant=False,
+                preserve_rng_state=True,
+            )
+            if self.gradient_checkpointing else self.soft_weight(self.logits, self.scales)
         )
         return functional.linear(inputs, weight, self.bias)
 
@@ -146,11 +158,21 @@ def train_stage(model, block, teacher, calls, names, stage, arguments):
     prefix = model.architecture.block_name(block.self_attn.layer_idx)
     originals = {name: block.get_submodule(name) for name in names}
     quantizers = {
-        name: GSQLinear(original, model.quantized[f"{prefix}.{name}"].to("cuda"), arguments.bits)
+        name: GSQLinear(
+            original, model.quantized[f"{prefix}.{name}"].to("cuda"),
+            arguments.bits, arguments.gradient_checkpointing,
+        )
         for name, original in originals.items()
     }
     for name, quantizer in quantizers.items():
         block.set_submodule(name, quantizer)
+    targets = None
+    if arguments.cache_targets:
+        with torch.no_grad():
+            targets = torch.cat([
+                stage_output(teacher, calls.batch(indices.tolist()), stage)
+                for indices in torch.arange(arguments.sequences).split(arguments.microbatch_size)
+            ])
     logits = [quantizer.logits for quantizer in quantizers.values()]
     scales = [quantizer.scales for quantizer in quantizers.values()]
     logit_momentum = [torch.zeros_like(parameter) for parameter in logits]
@@ -170,7 +192,10 @@ def train_stage(model, block, teacher, calls, names, stage, arguments):
                 selected = selection.tolist()
                 call = calls.batch(selected)
                 with torch.no_grad():
-                    target = stage_output(teacher, call, stage)
+                    target = (
+                        targets[selected]
+                        if targets is not None else stage_output(teacher, call, stage)
+                    )
                 prediction = stage_output(block, call, stage)
                 loss = functional.mse_loss(prediction.float(), target.float())
                 loss = loss * len(selected) / len(indices)
@@ -199,7 +224,9 @@ def train_stage(model, block, teacher, calls, names, stage, arguments):
             original = originals[name]
             original.weight.copy_(quantized.w.to(original.weight.dtype))
             block.set_submodule(name, original)
-            model.quantized[f"{prefix}.{name}"] = quantized.to("cpu", detach=True)
+            model.quantized[f"{prefix}.{name}"] = quantized.to(
+                "cuda" if arguments.preset == "h100-fast" else "cpu", detach=True
+            )
     return (time.perf_counter() - start) / len(names)
 
 
@@ -218,16 +245,17 @@ def tune_scales(model, teacher, batches, arguments):
     ]
     momentum = [torch.zeros_like(parameter) for parameter in parameters]
     teacher.cuda().eval()
-    model.module.gradient_checkpointing_enable(
-        gradient_checkpointing_kwargs={"use_reentrant": False}
-    )
+    if arguments.gradient_checkpointing:
+        model.module.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
     model.module.train()
     total_steps = math.ceil(len(batches) / 64)
     for step, indices in enumerate(torch.randperm(len(batches)).split(64)):
         for parameter in parameters:
             parameter.grad = None
         total_loss = torch.zeros((), device="cuda")
-        for selection in indices.split(arguments.microbatch_size):
+        for selection in indices.split(arguments.scale_microbatch_size):
             selected = selection.tolist()
             tokens = torch.cat([batches[index]["input_ids"] for index in selected]).cuda()
             with torch.no_grad():
@@ -235,13 +263,14 @@ def tune_scales(model, teacher, batches, arguments):
             hidden = model.module.model(tokens, use_cache=False).last_hidden_state
             flattened = hidden.detach().flatten(0, 1)
             gradient = torch.empty_like(flattened)
-            for offset in range(0, len(flattened), 64):
-                inputs = flattened[offset : offset + 64].requires_grad_(True)
+            for offset in range(0, len(flattened), arguments.distillation_chunk):
+                inputs = flattened[offset : offset + arguments.distillation_chunk]
+                inputs.requires_grad_(True)
                 prediction = (
                     model.module.lm_head(inputs).float() / arguments.distillation_temperature
                 )
                 with torch.no_grad():
-                    reference = teacher.lm_head(target[offset : offset + 64]).float()
+                    reference = teacher.lm_head(target[offset : offset + len(inputs)]).float()
                     reference = reference / arguments.distillation_temperature
                 loss = functional.kl_div(
                     prediction.log_softmax(-1), reference.log_softmax(-1),
@@ -270,34 +299,71 @@ def tune_scales(model, teacher, batches, arguments):
             original.cuda().weight.copy_(replacement.weight.to(original.weight.dtype))
             model.module.set_submodule(name, original)
             model.quantized[name] = model.quantized[name].to("cpu", detach=True)
-    teacher.cpu()
+    teacher.to(arguments.teacher_device)
 
 
 def main():
+    started = time.perf_counter()
     parser = argparse.ArgumentParser()
+    parser.add_argument("--preset", choices=("paper", "h100-fast"), default="paper")
     parser.add_argument("--model", default="meta-llama/Llama-3.2-1B")
     parser.add_argument("--bits", type=int, choices=(2, 3), default=2)
     parser.add_argument("--output", type=Path, default=Path("artifacts/llama_gsq"))
-    parser.add_argument("--activation-cache-mib", type=int, default=512)
-    parser.add_argument("--shuffle-buffer-size", type=int, default=1024)
-    parser.add_argument("--sequences", type=int, default=4096)
-    parser.add_argument("--sequence-length", type=int, default=4096)
-    parser.add_argument("--gptq-sequences", type=int, default=512)
-    parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--microbatch-size", type=int, default=2)
+    parser.add_argument("--activation-cache-mib", type=int)
+    parser.add_argument("--shuffle-buffer-size", type=int)
+    parser.add_argument("--sequences", type=int)
+    parser.add_argument("--sequence-length", type=int)
+    parser.add_argument("--gptq-sequences", type=int)
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--microbatch-size", type=int)
+    parser.add_argument("--scale-microbatch-size", type=int)
+    parser.add_argument("--distillation-chunk", type=int)
+    parser.add_argument("--cache-targets", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction)
+    parser.add_argument("--teacher-device", choices=("cpu", "cuda"))
+    parser.add_argument("--cpu-threads", type=int)
+    parser.add_argument("--evaluation-budget", choices=("fast", "full"))
     parser.add_argument("--stability-samples", type=int, default=256)
     parser.add_argument("--scale-lr", type=float, default=5e-5)
     parser.add_argument("--distillation-temperature", type=float, default=1.0)
     parser.add_argument("--skip-scale-tuning", action="store_true")
-    parser.add_argument("--tasks", default="arc_easy,arc_challenge,hellaswag,winogrande,piqa")
+    parser.add_argument("--tasks")
     parser.add_argument("--seed", type=int, default=0)
     arguments = parser.parse_args()
-    os.environ.setdefault("RAYON_NUM_THREADS", "2")
-    torch.set_num_threads(2)
+    settings = {
+        "paper": {
+            "activation_cache_mib": 512, "shuffle_buffer_size": 1024,
+            "sequences": 4096, "sequence_length": 4096, "gptq_sequences": 512,
+            "epochs": 20, "microbatch_size": 2, "scale_microbatch_size": 2,
+            "distillation_chunk": 64, "cache_targets": False,
+            "gradient_checkpointing": True, "teacher_device": "cpu", "cpu_threads": 2,
+            "evaluation_budget": "full",
+            "tasks": "arc_easy,arc_challenge,hellaswag,winogrande,piqa",
+        },
+        "h100-fast": {
+            "activation_cache_mib": 8192, "shuffle_buffer_size": 1024,
+            "sequences": 256, "sequence_length": 1024, "gptq_sequences": 64,
+            "epochs": 4, "microbatch_size": 32, "scale_microbatch_size": 8,
+            "distillation_chunk": 1024, "cache_targets": True,
+            "gradient_checkpointing": False, "teacher_device": "cuda", "cpu_threads": 8,
+            "evaluation_budget": "fast", "tasks": "",
+        },
+    }
+    for name, value in settings[arguments.preset].items():
+        if getattr(arguments, name) is None:
+            setattr(arguments, name, value)
+    print(
+        f"Preset {arguments.preset}  |  {arguments.sequences} sequences x "
+        f"{arguments.sequence_length} tokens x {arguments.epochs} epochs  |  "
+        f"microbatch {arguments.microbatch_size}, effective batch 64",
+        flush=True,
+    )
+    os.environ.setdefault("RAYON_NUM_THREADS", str(arguments.cpu_threads))
+    torch.set_num_threads(arguments.cpu_threads)
     torch.manual_seed(arguments.seed)
     source = mk.load(arguments.model, dtype="bfloat16", attn_implementation="sdpa")
     source.module.requires_grad_(False)
-    teacher = copy.deepcopy(source.module).cpu().eval()
+    teacher = copy.deepcopy(source.module).to(arguments.teacher_device).eval()
     model = mk.QModel(source.module, source.tokenizer, name=source.name)
     corpus = load_dataset(
         "HuggingFaceFW/fineweb-edu", "sample-10BT", split="train", streaming=True
@@ -322,6 +388,9 @@ def main():
             break
     batches = batches[: arguments.sequences + arguments.gptq_sequences]
     print(flush=True)
+    if arguments.preset == "h100-fast":
+        batches = [{"input_ids": batch["input_ids"].cuda()} for batch in batches]
+    quantization_started = time.perf_counter()
     print("Capturing one GPU call template; activations will be computed on demand.", flush=True)
     session = CalibrationSession(
         model, batches[:1], sequential=True, sample_rows=arguments.stability_samples,
@@ -330,6 +399,24 @@ def main():
     )
     session.prepare()
     templates = [session.block_calls(index)[0] for index in range(len(model.blocks))]
+    hidden = None
+    if (
+        len(batches) * arguments.sequence_length * model.config.hidden_size * 2
+        <= arguments.activation_cache_mib * 2**20
+    ):
+        with torch.no_grad():
+            hidden = torch.empty(
+                len(batches), arguments.sequence_length, model.config.hidden_size,
+                dtype=model.dtype, device="cuda",
+            )
+            for offset in range(0, len(batches), arguments.microbatch_size):
+                hidden[offset : offset + arguments.microbatch_size] = (
+                    model.module.model.embed_tokens(torch.cat([
+                        batch["input_ids"]
+                        for batch in batches[offset : offset + arguments.microbatch_size]
+                    ]).cuda())
+                )
+        print("All block inputs fit in VRAM; prefixes will be propagated once per block.", flush=True)
     initialization = mk.gptq(
         mk.int(
             arguments.bits, group=128, scale_fmt="fp32",
@@ -351,7 +438,10 @@ def main():
             flush=True,
         )
         original = teacher.model.layers[index].cuda()
-        calls = PrefixCalls(model, templates, index, batches, arguments.activation_cache_mib)
+        calls = PrefixCalls(
+            model, templates, index, batches, arguments.activation_cache_mib,
+            arguments.microbatch_size, hidden,
+        )
         statistics_session = copy.copy(session)
         statistics_session.calls = list(session.calls)
         statistics_session.calls[index] = calls[arguments.sequences :]
@@ -374,7 +464,8 @@ def main():
             )
             contexts[name] = context
             convert_layer(
-                model, full_name, projection, initialization, context, retain_device=False
+                model, full_name, projection, initialization, context,
+                retain_device=arguments.preset == "h100-fast",
             )
         reports = {report.name: report for report in model.layer_reports[report_start:]}
         del model.layer_reports[report_start:]
@@ -399,12 +490,17 @@ def main():
                     method=f"GSQ-{arguments.bits}",
                 ))
                 monitor(context, measurement, model.layer_reports[-1].seconds)
+            if hidden is not None and index + 1 < len(model.blocks):
+                for offset in range(0, len(batches), arguments.microbatch_size):
+                    inputs = hidden[offset : offset + arguments.microbatch_size]
+                    inputs.copy_(extract_hidden(templates[index].with_hidden(inputs).run(block)))
         del calls, statistics_session, statistics, contexts, context
-        original.cpu()
-    del session, templates
+        original.to(arguments.teacher_device)
+    del session, templates, hidden, inputs
     if arguments.bits == 2 and not arguments.skip_scale_tuning:
         tune_scales(model, teacher, batches[: arguments.sequences], arguments)
     model.save(arguments.output, overwrite=True)
+    quantization_seconds = time.perf_counter() - quantization_started
     probe = mk.data("wikitext2", n=4, seq=256, split="test", tokenizer=model.tokenizer)
     teacher_model = mk.Model(teacher.cuda(), model.tokenizer)
     unchanged = 0
@@ -428,13 +524,15 @@ def main():
             "Teacher-to-student KL; temperature and optimizer lr are implementation choices."
         ),
         "stability_stage": "Before end-to-end scale tuning",
-        "activation_strategy": "Bounded CUDA cache; GPU prefix and teacher recomputation",
+        "activation_strategy": "Full CUDA cache when it fits; bounded prefix cache otherwise",
+        "quantization_seconds": quantization_seconds,
         "layers": model.stability_reports,
         "next_token_dbs": unchanged / tested,
         "tested_next_token_decisions": tested,
         "quantized_bpw": model.bpw,
         "wikitext2_ppl": mk.ppl(
-            model, data="wikitext2", budget="full", seq=arguments.sequence_length
+            model, data="wikitext2", budget=arguments.evaluation_budget,
+            seq=arguments.sequence_length,
         ),
     }
     if arguments.tasks:
@@ -442,11 +540,14 @@ def main():
             model, arguments.tasks.split(","), batch_size=1,
             max_length=4096, num_fewshot=0,
         )["results"]
+    metrics["total_seconds"] = time.perf_counter() - started
     (arguments.output / "evaluation.json").write_text(json.dumps(metrics, indent=2) + "\n")
     print(
         f"\n{'Next-token DBS':<26} {metrics['next_token_dbs']:.2%}\n"
         f"{'WikiText-2 perplexity':<26} {metrics['wikitext2_ppl']:.4f}\n"
         f"{'Quantized bits/weight':<26} {metrics['quantized_bpw']:.4f}\n"
+        f"{'Quantization time':<26} {metrics['quantization_seconds']:.1f}s\n"
+        f"{'Total time':<26} {metrics['total_seconds']:.1f}s\n"
         f"{'Checkpoint':<26} {arguments.output}",
         flush=True,
     )
